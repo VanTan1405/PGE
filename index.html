@@ -14,6 +14,8 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/selection/active-line.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <style>
 :root{
   --bg:#080d18;--bg2:#0f1623;--bg3:#16202f;--bg4:#1c2a3e;--bg4h:#203348;
@@ -650,17 +652,32 @@ tr:hover td{background:rgba(255,255,255,.018);}
 
 <script>
 // ════════════════════════════════════════════════════
+//  FIREBASE INIT
+// ════════════════════════════════════════════════════
+const firebaseConfig = {
+  apiKey: "AIzaSyCOwujUDWHA-W9LZ0ZLNB7mf9c6q0HXk5c",
+  authDomain: "pget-64850.firebaseapp.com",
+  projectId: "pget-64850",
+  storageBucket: "pget-64850.firebasestorage.app",
+  messagingSenderId: "539489743222",
+  appId: "1:539489743222:web:cef63d3077eb3c9ddc8a57",
+  measurementId: "G-RMS5ZL5CJ5"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+// ════════════════════════════════════════════════════
 //  CONSTANTS & STATE
 // ════════════════════════════════════════════════════
 const ADMIN_CRED = { username:'TANNV', password:'Tien@14051', fullname:'Trần Anh Nhân', dept:'IT Admin', role:'admin' };
 
-// Users stored as plain object array (no encryption per request)
-let users = JSON.parse(localStorage.getItem('bravo_users') || '[]');
-// Current session
+// Users, history, and reminders now live in Firestore. Local arrays are
+// populated on startup via loadUsers()/loadHistory()/loadReminders() and
+// kept in sync on every write via the Firestore helper functions below.
+let users = [];
 let session = JSON.parse(localStorage.getItem('bravo_session') || 'null');
-// All history (each record has .owner = username)
-let allHistory = JSON.parse(localStorage.getItem('bravo_hist_all') || '[]');
-let reminders = JSON.parse(localStorage.getItem('bravo_rems') || '[]');
+let allHistory = [];
+let reminders = [];
 
 let curSc = 1, curPg = 'converter', histPg = 1;
 const PER_PAGE = 10;
@@ -671,9 +688,77 @@ localStorage.setItem('bravo_sess', sessId);
 const sessStart = new Date().toISOString();
 
 // ════════════════════════════════════════════════════
+//  FIRESTORE DATA LAYER
+// ════════════════════════════════════════════════════
+async function loadUsers() {
+  try {
+    const snap = await db.collection('users').get();
+    users = snap.docs.map(d => d.data());
+  } catch (e) { console.error('loadUsers error', e); toast('er','Lỗi kết nối Firestore', e.message); }
+}
+async function saveUser(u) {
+  try { await db.collection('users').doc(u.username).set(u); }
+  catch (e) { console.error('saveUser error', e); toast('er','Lỗi lưu user', e.message); }
+}
+async function deleteUserDoc(username) {
+  try { await db.collection('users').doc(username).delete(); }
+  catch (e) { console.error('deleteUserDoc error', e); toast('er','Lỗi xóa user', e.message); }
+}
+
+async function loadHistory() {
+  try {
+    const snap = await db.collection('history').orderBy('ts','desc').limit(1000).get();
+    allHistory = snap.docs.map(d => d.data());
+  } catch (e) { console.error('loadHistory error', e); toast('er','Lỗi kết nối Firestore', e.message); }
+}
+async function addHistoryRec(rec) {
+  try { await db.collection('history').doc(String(rec.id)).set(rec); }
+  catch (e) { console.error('addHistoryRec error', e); toast('er','Lỗi lưu lịch sử', e.message); }
+}
+async function deleteHistoryRec(id) {
+  try { await db.collection('history').doc(String(id)).delete(); }
+  catch (e) { console.error('deleteHistoryRec error', e); }
+}
+async function clearMyHistFirestore(username) {
+  try {
+    const snap = await db.collection('history').where('owner','==',username).get();
+    const batch = db.batch();
+    snap.docs.forEach(d => batch.delete(d.ref));
+    await batch.commit();
+  } catch (e) { console.error('clearMyHistFirestore error', e); }
+}
+async function resetHistoryFirestore() {
+  try {
+    const snap = await db.collection('history').get();
+    const chunks = [];
+    let batch = db.batch(), n = 0;
+    snap.docs.forEach(d => {
+      batch.delete(d.ref); n++;
+      if (n === 400) { chunks.push(batch); batch = db.batch(); n = 0; }
+    });
+    chunks.push(batch);
+    for (const b of chunks) await b.commit();
+  } catch (e) { console.error('resetHistoryFirestore error', e); }
+}
+
+async function loadReminders() {
+  try {
+    const snap = await db.collection('reminders').get();
+    reminders = snap.docs.map(d => d.data());
+  } catch (e) { console.error('loadReminders error', e); }
+}
+async function saveReminder(r) {
+  try { await db.collection('reminders').doc(String(r.id)).set(r); }
+  catch (e) { console.error('saveReminder error', e); }
+}
+async function deleteReminderDoc(id) {
+  try { await db.collection('reminders').doc(String(id)).delete(); }
+  catch (e) { console.error('deleteReminderDoc error', e); }
+}
+
+// ════════════════════════════════════════════════════
 //  AUTH HELPERS
 // ════════════════════════════════════════════════════
-function saveUsers() { localStorage.setItem('bravo_users', JSON.stringify(users)); }
 function saveSession(u) { session = u; localStorage.setItem('bravo_session', JSON.stringify(u)); }
 function clearSession() { session = null; localStorage.removeItem('bravo_session'); }
 
@@ -711,9 +796,11 @@ function logoutAuth() {
 }
 
 // ════════════════════════════════════════════════════
-//  STARTUP — check session
+//  STARTUP — load Firestore data, then check session
 // ════════════════════════════════════════════════════
-window.addEventListener('DOMContentLoaded', () => {
+window.addEventListener('DOMContentLoaded', async () => {
+  await Promise.all([loadUsers(), loadHistory(), loadReminders()]);
+
   // Auto-fill remembered password
   const rem = localStorage.getItem('bravo_remember');
   if (rem) {
@@ -798,7 +885,7 @@ function doLogin() {
 
     // Approved user
     user.lastLogin = new Date().toISOString();
-    saveUsers();
+    saveUser(user);
     if (remember) localStorage.setItem('bravo_remember', JSON.stringify({u:username,p:password}));
     else localStorage.removeItem('bravo_remember');
     const u = { username: user.username, fullname: user.fullname, role: 'user', dept: user.dept };
@@ -810,7 +897,7 @@ function doLogin() {
 // ════════════════════════════════════════════════════
 //  REGISTER
 // ════════════════════════════════════════════════════
-function doRegister() {
+async function doRegister() {
   const username = document.getElementById('r-user').value.trim();
   const fullname = document.getElementById('r-name').value.trim();
   const email = document.getElementById('r-email').value.trim();
@@ -828,40 +915,40 @@ function doRegister() {
   const btn = document.getElementById('btn-reg');
   btn.disabled = true; btn.textContent = '⏳ Đang tạo tài khoản...';
 
+  const newUser = {
+    username, fullname, email, dept, password,
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+    lastLogin: null,
+    approvedAt: null,
+    approvedBy: null
+  };
+  users.push(newUser);
+  await saveUser(newUser);
+  updatePendingBadge();
+
+  showAuthMsg('reg-msg','ok','✅ Tài khoản đã được tạo! Vui lòng chờ Admin (TANNV) phê duyệt.');
+  btn.disabled = false; btn.textContent = '✨ Tạo tài khoản';
+
   setTimeout(() => {
-    const newUser = {
-      username, fullname, email, dept, password,
-      status: 'pending',
-      createdAt: new Date().toISOString(),
-      lastLogin: null,
-      approvedAt: null,
-      approvedBy: null
-    };
-    users.push(newUser);
-    saveUsers();
-    updatePendingBadge();
-
-    showAuthMsg('reg-msg','ok','✅ Tài khoản đã được tạo! Vui lòng chờ Admin (TANNV) phê duyệt.');
-    btn.disabled = false; btn.textContent = '✨ Tạo tài khoản';
-
-    setTimeout(() => {
-      saveSession({ username, fullname, role:'user', dept });
-      document.getElementById('form-register').style.display = 'none';
-      document.getElementById('form-pending').style.display = 'block';
-      document.getElementById('pending-uname').textContent = username;
-    }, 1800);
-  }, 600);
+    saveSession({ username, fullname, role:'user', dept });
+    document.getElementById('form-register').style.display = 'none';
+    document.getElementById('form-pending').style.display = 'block';
+    document.getElementById('pending-uname').textContent = username;
+  }, 1800);
 }
 
 function checkApproval() {
   if (!session) return;
-  const u = findUser(session.username);
-  if (u && u.status === 'approved') {
-    toast('ok','Đã được duyệt!','Đang khởi động ứng dụng...');
-    setTimeout(() => { session.role = 'user'; saveSession(session); launchApp(session); }, 1000);
-  } else {
-    toast('wa','Chưa được duyệt','Vui lòng liên hệ Admin TANNV');
-  }
+  loadUsers().then(() => {
+    const u = findUser(session.username);
+    if (u && u.status === 'approved') {
+      toast('ok','Đã được duyệt!','Đang khởi động ứng dụng...');
+      setTimeout(() => { session.role = 'user'; saveSession(session); launchApp(session); }, 1000);
+    } else {
+      toast('wa','Chưa được duyệt','Vui lòng liên hệ Admin TANNV');
+    }
+  });
 }
 
 // ════════════════════════════════════════════════════
@@ -994,7 +1081,7 @@ function runConvert() {
       renderLog(log);
       const rec = { id:Date.now(), ts:new Date().toISOString(), sc:curSc, input:sql, output:result, changes:log.length, status:'success', ms, owner: session.username };
       allHistory.unshift(rec);
-      saveAllHist();
+      addHistoryRec(rec);
       updateSidebar();
       toast('ok','Thành công!',`${log.length} quy tắc — ${ms}ms`);
     } catch(e) { toast('er','Lỗi',e.message); }
@@ -1190,7 +1277,7 @@ function clearEditors(){if(edIn)edIn.setValue('');if(edOut)edOut.setValue('');do
 function copyOut(){const v=edOut.getValue();if(!v.trim()){toast('inf','Trống','');return;}navigator.clipboard.writeText(v).then(()=>toast('ok','Đã copy!','PostgreSQL SQL đã được sao chép'));}
 function dlOut(){const v=edOut.getValue();if(!v.trim()){toast('inf','Trống','');return;}const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([v],{type:'text/plain'}));a.download='bravo_pg_'+Date.now()+'.sql';a.click();toast('ok','Đã tải!','');}
 function formatInput(){let s=edIn.getValue();['SELECT','FROM','WHERE','AND','OR','ORDER BY','GROUP BY','HAVING','INNER JOIN','LEFT OUTER JOIN','LEFT JOIN','RIGHT JOIN','ON','INSERT INTO','VALUES','UPDATE','SET','DELETE','CREATE TABLE','ALTER TABLE'].forEach(k=>{s=s.replace(new RegExp('\\b'+k+'\\b','gi'),'\n'+k);});s=s.replace(/\n{2,}/g,'\n').trim();edIn.setValue(s);toast('ok','Đã format','');}
-function saveNow(){const i=edIn.getValue().trim(),o=edOut.getValue().trim();if(!i||!o){toast('inf','Chưa đủ','Hãy convert trước');return;}const rec={id:Date.now(),ts:new Date().toISOString(),sc:curSc,input:i,output:o,changes:0,status:'success',ms:0,owner:session.username};allHistory.unshift(rec);saveAllHist();updateSidebar();toast('ok','Đã lưu!','');}
+function saveNow(){const i=edIn.getValue().trim(),o=edOut.getValue().trim();if(!i||!o){toast('inf','Chưa đủ','Hãy convert trước');return;}const rec={id:Date.now(),ts:new Date().toISOString(),sc:curSc,input:i,output:o,changes:0,status:'success',ms:0,owner:session.username};allHistory.unshift(rec);addHistoryRec(rec);updateSidebar();toast('ok','Đã lưu!','');}
 function loadSample(){
   const s={
     1:`CREATE PROCEDURE dbo.usp_B30AccDoc_GetData\n\t@_DocDate1\t\tDATETIME = NULL,\n\t@_DocDate2\t\tDATETIME = NULL,\n\t@_BranchCode\tNVARCHAR(24) = NULL,\n\t@pout_LayoutXML\tNVARCHAR(MAX) OUTPUT,\n\t@pout_ColCount\tSMALLINT OUTPUT\nAS\nBEGIN\n\tSET NOCOUNT ON;\n\tSELECT @pout_LayoutXML = N'<DefaultReport></DefaultReport>', @pout_ColCount = 5\n\tSELECT TOP 100\n\t\t[d].[Id], [d].[DocNo], [d].[DocDate],\n\t\tISNULL([d].[BranchCode], N'') AS BranchCode,\n\t\tCONVERT(VARCHAR(10), [d].[DocDate], 120) AS DocDateStr\n\tFROM [dbo].[B30AccDoc] [d] WITH(NOLOCK)\n\tWHERE [d].[IsActive] = 1\n\t\tAND ([d].[DocDate] >= @_DocDate1 OR @_DocDate1 IS NULL)\n\tORDER BY [d].[DocDate] DESC;\nEND\nGO`,
@@ -1204,7 +1291,6 @@ function loadSample(){
 // ════════════════════════════════════════════════════
 //  HISTORY
 // ════════════════════════════════════════════════════
-function saveAllHist(){if(allHistory.length>1000)allHistory=allHistory.slice(0,1000);localStorage.setItem('bravo_hist_all',JSON.stringify(allHistory));}
 function myHistory(){return session?.role==='admin'?allHistory:allHistory.filter(r=>r.owner===session?.username);}
 function updateSidebar(){
   const my=myHistory();
@@ -1284,11 +1370,13 @@ function renderHist(){
 function goPg(p){histPg=p;renderHist();}
 function clearMyHist(){
   if(!confirm('Xóa toàn bộ lịch sử của bạn?'))return;
-  allHistory=allHistory.filter(r=>r.owner!==session?.username);
-  saveAllHist();updateSidebar();renderHist();
+  const uname = session?.username;
+  allHistory=allHistory.filter(r=>r.owner!==uname);
+  clearMyHistFirestore(uname);
+  updateSidebar();renderHist();
   toast('inf','Đã xóa lịch sử của bạn','');
 }
-function delRec(id){allHistory=allHistory.filter(r=>r.id!==id);saveAllHist();updateSidebar();renderHist();toast('inf','Đã xóa','');}
+function delRec(id){allHistory=allHistory.filter(r=>r.id!==id);deleteHistoryRec(id);updateSidebar();renderHist();toast('inf','Đã xóa','');}
 
 function viewRec(id){
   const r=allHistory.find(x=>x.id===id);if(!r)return;
@@ -1386,27 +1474,27 @@ function renderUserTable(){
   }).join('');
 }
 
-function approveUser(username){
+async function approveUser(username){
   const u=users.find(x=>x.username===username);if(!u)return;
   u.status='approved';u.approvedAt=new Date().toISOString();u.approvedBy='TANNV';
-  saveUsers();updatePendingBadge();renderUserMgmt();
+  await saveUser(u);updatePendingBadge();renderUserMgmt();
   toast('ok',`Đã phê duyệt ${username}`,'User có thể đăng nhập ngay');
 }
-function rejectUser(username){
+async function rejectUser(username){
   if(!confirm(`Từ chối tài khoản ${username}?`))return;
   const u=users.find(x=>x.username===username);if(!u)return;
-  u.status='rejected';saveUsers();updatePendingBadge();renderUserMgmt();
+  u.status='rejected';await saveUser(u);updatePendingBadge();renderUserMgmt();
   toast('inf',`Đã từ chối ${username}`,'');
 }
-function suspendUser(username){
+async function suspendUser(username){
   if(!confirm(`Tạm dừng tài khoản ${username}?`))return;
   const u=users.find(x=>x.username===username);if(!u)return;
-  u.status='pending';saveUsers();updatePendingBadge();renderUserMgmt();
+  u.status='pending';await saveUser(u);updatePendingBadge();renderUserMgmt();
   toast('wa',`Đã tạm dừng ${username}`,'');
 }
-function deleteUser(username){
+async function deleteUser(username){
   if(!confirm(`XÓA HOÀN TOÀN tài khoản ${username}?\nLịch sử của user này sẽ bị giữ lại.`))return;
-  users=users.filter(u=>u.username!==username);saveUsers();updatePendingBadge();renderUserMgmt();
+  users=users.filter(u=>u.username!==username);await deleteUserDoc(username);updatePendingBadge();renderUserMgmt();
   toast('inf',`Đã xóa ${username}`,'');
 }
 
@@ -1441,18 +1529,18 @@ function renderCharts(){
 function addRem(){
   const t=document.getElementById('r-rtitle').value.trim(),ti=document.getElementById('r-rtime').value;
   if(!t||!ti){toast('inf','Thiếu','Nhập tiêu đề và thời gian');return;}
-  reminders.push({id:Date.now(),title:t,time:ti,fired:false,owner:session?.username});
-  saveRems();renderRems();document.getElementById('r-rtitle').value='';toast('ok','Đã thêm nhắc nhở',t);
+  const rec={id:Date.now(),title:t,time:ti,fired:false,owner:session?.username};
+  reminders.push(rec);
+  saveReminder(rec);renderRems();document.getElementById('r-rtitle').value='';toast('ok','Đã thêm nhắc nhở',t);
 }
-function saveRems(){localStorage.setItem('bravo_rems',JSON.stringify(reminders));}
-function delRem(id){reminders=reminders.filter(r=>r.id!==id);saveRems();renderRems();}
+function delRem(id){reminders=reminders.filter(r=>r.id!==id);deleteReminderDoc(id);renderRems();}
 function renderRems(){
   const l=document.getElementById('rem-list');if(!l)return;
   const myRems=reminders.filter(r=>!r.owner||r.owner===session?.username);
   if(!myRems.length){l.innerHTML='<div style="color:var(--txt3);font-size:12.5px;text-align:center;padding:16px">Chưa có nhắc nhở nào</div>';return;}
   l.innerHTML=myRems.map(r=>{const dt=new Date(r.time),past=dt<new Date();return `<div class="rem-item"><div style="font-size:18px">${past?'✅':'🔔'}</div><div style="flex:1"><div style="font-size:13px;font-weight:700;${past?'text-decoration:line-through;color:var(--txt3)':''}">${r.title}</div><div style="font-size:10.5px;color:var(--txt3)">${dt.toLocaleString('vi-VN')} ${past?'(Đã qua)':''}</div></div><button class="btn btn-d btn-sm btn-ico" onclick="delRem(${r.id})">✕</button></div>`;}).join('');
 }
-function checkRems(){const now=new Date();reminders.forEach(r=>{if(!r.fired&&new Date(r.time)<=now&&(!r.owner||r.owner===session?.username)){r.fired=true;toast('wa','🔔 Nhắc nhở!',r.title);saveRems();}});}
+function checkRems(){const now=new Date();reminders.forEach(r=>{if(!r.fired&&new Date(r.time)<=now&&(!r.owner||r.owner===session?.username)){r.fired=true;toast('wa','🔔 Nhắc nhở!',r.title);saveReminder(r);}});}
 
 // ════════════════════════════════════════════════════
 //  ADMIN DASHBOARD
@@ -1509,10 +1597,12 @@ function exportCSV(){
   const a=document.createElement('a');a.href=URL.createObjectURL(new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'}));a.download='bravo_export_'+Date.now()+'.csv';a.click();
   toast('ok','Xuất CSV thành công!',`${data.length} bản ghi`);
 }
-function resetAll(){
+async function resetAll(){
   if(session?.role!=='admin'){toast('er','Không có quyền','Chỉ Admin mới reset được');return;}
   if(!confirm('⚠️ RESET TOÀN BỘ DỮ LIỆU HỆ THỐNG?\nXóa tất cả lịch sử. Tài khoản user được giữ lại.\nKHÔNG THỂ HOÀN TÁC!'))return;
-  allHistory=[];saveAllHist();updateSidebar();
+  allHistory=[];
+  await resetHistoryFirestore();
+  updateSidebar();
   toast('inf','Đã reset lịch sử','');
 }
 
