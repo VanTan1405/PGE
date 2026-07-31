@@ -1730,14 +1730,48 @@ function sendChatMessage() {
   msgs.insertAdjacentHTML('beforeend', typingHtml);
   msgs.scrollTop = msgs.scrollHeight;
   
-  // Mock AI response
-  setTimeout(() => {
+  // Thực tế gọi API AI (Google Gemini)
+  let GEMINI_API_KEY = localStorage.getItem('bravo_gemini_key');
+  if (!GEMINI_API_KEY) {
+    GEMINI_API_KEY = prompt("Nhập Google Gemini API Key của bạn (Key sẽ chỉ lưu trên trình duyệt của bạn):");
+    if (GEMINI_API_KEY) {
+      localStorage.setItem('bravo_gemini_key', GEMINI_API_KEY);
+    } else {
+      const tEl = document.getElementById(typingId);
+      if(tEl) tEl.remove();
+      const aiHtml = `
+        <div class="msg ai">
+          <div class="msg-av">🤖</div>
+          <div class="msg-bub">
+            Bạn cần cung cấp API Key để tôi có thể kết nối với hệ thống AI.<br/><br/>
+            Hãy thử gửi lại tin nhắn và nhập Key nhé. Nếu bạn muốn xóa Key cũ, hãy dùng lệnh <code>localStorage.removeItem('bravo_gemini_key')</code> trong Console F12.
+          </div>
+        </div>
+      `;
+      msgs.insertAdjacentHTML('beforeend', aiHtml);
+      msgs.scrollTop = msgs.scrollHeight;
+      return;
+    }
+  }
+
+  const systemPrompt = "Bạn là chuyên gia cấp cao về hệ thống PGE và chuẩn lập trình BRAVO trên PostgreSQL. Nhiệm vụ của bạn là giải đáp thắc mắc, hướng dẫn chuyển đổi từ T-SQL sang PostgreSQL chuẩn xác tuyệt đối. Hãy trả lời ngắn gọn, đúng trọng tâm và dùng định dạng HTML cơ bản (<b>, <i>, <code>, <br>) để dễ đọc. Nếu không chắc chắn, hãy yêu cầu người dùng cung cấp thêm ngữ cảnh.";
+
+  fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: systemPrompt }] },
+      contents: [{ parts: [{ text: text }] }]
+    })
+  })
+  .then(res => res.json())
+  .then(data => {
     const tEl = document.getElementById(typingId);
     if(tEl) tEl.remove();
-    
-    let reply = "Đây là phản hồi tự động từ Trợ lý AI PGE. Bạn vừa hỏi về: <strong>" + text + "</strong>. <br/><br/>(Chức năng trả lời thực tế bằng AI đang được kết nối).";
-    if(text.toLowerCase().includes('bravo') || text.toLowerCase().includes('pge')) {
-      reply = "Đối với chuẩn BRAVO trên PostgreSQL, bạn lưu ý:<br/>- <code>ISNULL</code> nên đổi thành <code>COALESCE</code>.<br/>- <code>GETDATE()</code> đổi thành <code>NOW()</code>.<br/>- Các Stored Procedure trả về bảng cần dùng <code>REFCURSOR</code>.";
+    let reply = "Xin lỗi, tôi không thể xử lý câu hỏi này.";
+    if (data.candidates && data.candidates.length > 0) {
+      reply = data.candidates[0].content.parts[0].text;
+      reply = reply.replace(/\n/g, '<br/>').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>').replace(/```(.*?)```/gs, '<div class="mo-code" style="margin-top:6px">$1</div>').replace(/`(.*?)`/g, '<code>$1</code>');
     }
     
     const aiHtml = `
@@ -1748,7 +1782,19 @@ function sendChatMessage() {
     `;
     msgs.insertAdjacentHTML('beforeend', aiHtml);
     msgs.scrollTop = msgs.scrollHeight;
-  }, 1200);
+  })
+  .catch(err => {
+    const tEl = document.getElementById(typingId);
+    if(tEl) tEl.remove();
+    const aiHtml = `
+      <div class="msg ai">
+        <div class="msg-av">🤖</div>
+        <div class="msg-bub" style="color:var(--red)">Lỗi kết nối AI: ${err.message}</div>
+      </div>
+    `;
+    msgs.insertAdjacentHTML('beforeend', aiHtml);
+    msgs.scrollTop = msgs.scrollHeight;
+  });
 }
 </script>
 </body>
