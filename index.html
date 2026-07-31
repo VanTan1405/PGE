@@ -1769,7 +1769,10 @@ function sendChatMessage() {
     const tEl = document.getElementById(typingId);
     if(tEl) tEl.remove();
     let reply = "Xin lỗi, tôi không thể xử lý câu hỏi này.";
-    if (data.candidates && data.candidates.length > 0) {
+    
+    if (data.error) {
+      reply = `❌ <strong>Lỗi từ Google API:</strong> ${data.error.message}<br/><br/><i>Gợi ý: Hãy kiểm tra lại API Key. Key của Google Gemini thường bắt đầu bằng <code>AIzaSy...</code>. Mã Key bạn nhập có vẻ thuộc về một dịch vụ khác. Để xóa Key cũ, hãy gõ lệnh <code>localStorage.removeItem('bravo_gemini_key')</code> trong F12 Console và tải lại trang.</i>`;
+    } else if (data.candidates && data.candidates.length > 0) {
       reply = data.candidates[0].content.parts[0].text;
       reply = reply.replace(/\n/g, '<br/>').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>').replace(/```(.*?)```/gs, '<div class="mo-code" style="margin-top:6px">$1</div>').replace(/`(.*?)`/g, '<code>$1</code>');
     }
