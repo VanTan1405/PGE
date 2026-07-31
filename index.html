@@ -1578,15 +1578,7 @@ function resetAll(){
 // ════════════════════════════════════════════════════
 //  TOAST
 // ════════════════════════════════════════════════════
-function toast(type,title,sub){
-  const tc=document.getElementById('tc');
-  const icons={ok:'✅',er:'❌',inf:'💡',wa:'⚠️'};
-  const el=document.createElement('div');
-  el.className=`toast ${type}`;
-  el.innerHTML=`<span class="toast-ico">${icons[type]||'ℹ️'}</span><div class="toast-txt"><div class="toast-t">${title}</div>${sub?`<div class="toast-s">${sub}</div>`:''}</div>`;
-  tc.appendChild(el);
-  setTimeout(()=>{el.classList.add('rm');setTimeout(()=>el.remove(),300);},3200);
-}
+
 </script>
 </body>
 </html>
