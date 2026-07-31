@@ -1762,7 +1762,7 @@ function sendChatMessage() {
 
   const systemPrompt = "Bạn là chuyên gia cấp cao về hệ thống PGE và chuẩn lập trình BRAVO trên PostgreSQL. Nhiệm vụ của bạn là giải đáp thắc mắc, hướng dẫn chuyển đổi từ T-SQL sang PostgreSQL chuẩn xác tuyệt đối. Hãy trả lời ngắn gọn, đúng trọng tâm và dùng định dạng HTML cơ bản (<b>, <i>, <code>, <br>) để dễ đọc. Nếu không chắc chắn, hãy yêu cầu người dùng cung cấp thêm ngữ cảnh.";
 
-  fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${GEMINI_API_KEY}`, {
+  fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=${GEMINI_API_KEY}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
