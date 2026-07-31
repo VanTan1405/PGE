@@ -974,9 +974,15 @@ const SC_DESC = {
   3:`<strong>KB3: Tương đương</strong>`
 };
 
-function runConvert() {
-  const sql = edIn.getValue().trim();
-    const dt=new Date(r.ts),ago=timeAgo(dt);
+function renderAdminActs() {
+  const el = document.getElementById('adm-acts');
+  if(!el) return;
+  if(allHistory.length === 0) { el.innerHTML = '<div class="empty"><div class="empty-ico">📭</div><div class="empty-t">Chưa có hoạt động nào</div></div>'; return; }
+  const SC_AVAT = {1:'av-bl', 2:'av-gr', 3:'av-rd'};
+  const SC_ICO = {1:'⚡', 2:'🎯', 3:'🔄'};
+  const SC_LABELS = {1:'KB1', 2:'KB2', 3:'KB3'};
+  el.innerHTML = allHistory.slice(0, 50).map(r => {
+    const dt = new Date(r.ts), ago = timeAgo(dt);
     return `<div class="act-item">
       <div class="act-av ${SC_AVAT[r.sc]||'av-bl'}">${SC_ICO[r.sc]||'⚡'}</div>
       <div class="act-info">
@@ -986,6 +992,57 @@ function runConvert() {
       <div class="act-time">${ago}</div>
     </div>`;
   }).join('');
+}
+
+function runConvert() {
+  const sql = edIn.getValue().trim();
+  if(!sql) { toast('wa', 'Cảnh báo', 'Vui lòng nhập code SQL!'); return; }
+  
+  const startTime = Date.now();
+  let changes = 0;
+  let out = sql;
+
+  // QUY TẮC RÚT RA TỪ TÀI LIỆU (NB_GiaoTrinh_PostgreSQL.docx)
+  const rules = [
+    { p: /GETUTCDATE\(\)/gi, r: "NOW() AT TIME ZONE 'UTC'" },
+    { p: /GETDATE\(\)/gi, r: "NOW()" },
+    { p: /ISNULL\s*\(/gi, r: "COALESCE(" },
+    { p: /\bBIT\b/gi, r: "BOOLEAN" },
+    { p: /\bTINYINT\b/gi, r: "SMALLINT" },
+    { p: /\bUNIQUEIDENTIFIER\b/gi, r: "UUID" },
+    { p: /\bNVARCHAR/gi, r: "VARCHAR" },
+    { p: /\bLEN\s*\(/gi, r: "LENGTH(" },
+    { p: /\bCHARINDEX\s*\(/gi, r: "POSITION(" },
+    { p: /\bNEWID\(\)/gi, r: "gen_random_uuid()" },
+    { p: /\bPRINT\b/gi, r: "RAISE NOTICE" },
+    { p: /\bRAISERROR\b/gi, r: "RAISE EXCEPTION" },
+    { p: /IsActive\s*=\s*1/gi, r: "IsActive = TRUE" },
+    { p: /IsActive\s*=\s*0/gi, r: "IsActive = FALSE" },
+    { p: /\bTOP\s+(\d+)\b/gi, r: "LIMIT $1" }
+  ];
+
+  rules.forEach(rule => {
+    const matches = out.match(rule.p);
+    if (matches) {
+      out = out.replace(rule.p, rule.r);
+      changes += matches.length;
+    }
+  });
+
+  edOut.setValue(out);
+  const ms = Date.now() - startTime;
+  
+  const rec = {
+    id: Date.now(), ts: new Date().toISOString(), owner: session?.username || 'Guest',
+    sc: curSc, input: sql, output: out, changes: changes, ms: ms, status: 'OK'
+  };
+  
+  allHistory.unshift(rec);
+  if(allHistory.length > 200) allHistory.pop();
+  addHistoryRec(rec);
+  
+  toast('ok', 'Chuyển đổi hoàn tất!', changes + ' rules áp dụng (' + ms + 'ms)');
+  renderAdminActs(); // Cập nhật lại lịch sử nếu admin đang xem
 }
 function timeAgo(d){const df=Date.now()-d;if(df<6e4)return'Vừa xong';if(df<36e5)return Math.floor(df/6e4)+' phút trước';if(df<864e5)return Math.floor(df/36e5)+' giờ trước';return Math.floor(df/864e5)+' ngày trước';}
 
@@ -1461,6 +1518,21 @@ BEGIN
 	RETURN NEXT _ref1;
 END;
 $$;
+
+PHẦN IV: CÁC QUY TẮC NÂNG CAO TỪ GIÁO TRÌNH BRAVO 2026
+1. Biến & Hàm Hệ thống: 
+ - @@ROWCOUNT thay bằng GET DIAGNOSTICS _rc := ROW_COUNT;
+ - SCOPE_IDENTITY() thay bằng RETURNING Id INTO _var;
+ - PRINT thay bằng RAISE NOTICE; RAISERROR thay bằng RAISE EXCEPTION.
+2. Cú pháp & Khối lệnh:
+ - Kịch bản không trả dữ liệu (Procedure): Dùng CREATE PROCEDURE thay vì FUNCTION. Nếu có tham số OUTPUT, dùng INOUT.
+ - Hàm PIVOT chuyển thành hàm aggregate với FILTER (vd: SUM(x) FILTER (WHERE...)).
+ - Khối lệnh script độc lập (ad-hoc) phải bọc trong DO $$ DECLARE ... BEGIN ... END $$;
+ - CTE đệ quy BẮT BUỘC phải dùng từ khóa WITH RECURSIVE.
+3. Kỹ thuật Function nâng cao:
+ - BẮT BUỘC gán giá trị DEFAULT NULL::Type cho mọi tham số đầu vào.
+ - Gọi function mà không gán kết quả BẮT BUỘC dùng PERFORM (vd: PERFORM dbo.ufn_log(...)).
+ - Bỏ hoàn toàn các hàm ufn_sys_DataName(), vì PostgreSQL không query cross-database, truy cập bảng luôn có tiền tố dbo.
 
 ==> Bạn đọc hết mục trên, cần hỏi thêm hãy hỏi lại tôi. Nếu đã hiểu hết các quy tắc, hãy nhắn "OK" để bắt đầu.
 `;
