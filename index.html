@@ -590,6 +590,7 @@ tr:hover td{background:rgba(255,255,255,.018);}
           </div>
         </div>
         <div class="chat-input-area">
+          <button class="btn-s btn-sm" onclick="resetGeminiKey()" title="Đổi API Key AI" style="padding: 10px; border-radius: var(--rs); height: 42px;">🔑</button>
           <textarea class="chat-input" id="chat-input" placeholder="Nhập câu hỏi của bạn... (Enter để gửi, Shift+Enter để xuống dòng)" rows="1" onkeydown="handleChatKey(event)"></textarea>
           <button class="btn-send" onclick="sendChatMessage()">Gửi 🚀</button>
         </div>
@@ -1692,6 +1693,11 @@ function uploadAvatar(event) {
   reader.readAsDataURL(file);
 }
 
+function resetGeminiKey() {
+  localStorage.removeItem('bravo_gemini_key');
+  toast('inf', 'Thông báo', 'Đã xóa API Key cũ. Vui lòng gửi một tin nhắn mới để nhập lại Key.');
+}
+
 function handleChatKey(e) {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
@@ -1744,7 +1750,7 @@ function sendChatMessage() {
           <div class="msg-av">🤖</div>
           <div class="msg-bub">
             Bạn cần cung cấp API Key để tôi có thể kết nối với hệ thống AI.<br/><br/>
-            Hãy thử gửi lại tin nhắn và nhập Key nhé. Nếu bạn muốn xóa Key cũ, hãy dùng lệnh <code>localStorage.removeItem('bravo_gemini_key')</code> trong Console F12.
+            Hãy thử gửi lại tin nhắn và dán chính xác Key mà bạn vừa lấy từ Google AI Studio vào nhé.
           </div>
         </div>
       `;
@@ -1771,7 +1777,7 @@ function sendChatMessage() {
     let reply = "Xin lỗi, tôi không thể xử lý câu hỏi này.";
     
     if (data.error) {
-      reply = `❌ <strong>Lỗi từ Google API:</strong> ${data.error.message}<br/><br/><i>Gợi ý: Hãy kiểm tra lại API Key. Key của Google Gemini thường bắt đầu bằng <code>AIzaSy...</code>. Mã Key bạn nhập có vẻ thuộc về một dịch vụ khác. Để xóa Key cũ, hãy gõ lệnh <code>localStorage.removeItem('bravo_gemini_key')</code> trong F12 Console và tải lại trang.</i>`;
+      reply = `❌ <strong>Lỗi từ Google API:</strong> ${data.error.message}<br/><br/><i>Gợi ý: Vui lòng kiểm tra lại xem bạn đã copy chính xác toàn bộ API Key chưa. Để đổi Key, hãy nhấn vào <strong>nút hình chiếc chìa khóa (🔑)</strong> cạnh ô nhập chữ rồi gửi lại tin nhắn nhé!</i>`;
     } else if (data.candidates && data.candidates.length > 0) {
       reply = data.candidates[0].content.parts[0].text;
       reply = reply.replace(/\n/g, '<br/>').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>').replace(/```(.*?)```/gs, '<div class="mo-code" style="margin-top:6px">$1</div>').replace(/`(.*?)`/g, '<code>$1</code>');
