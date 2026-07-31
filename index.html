@@ -7,6 +7,8 @@
   <meta name="description" content="Chuyển đổi T-SQL sang PostgreSQL chuẩn BRAVO. Đăng nhập để tiếp tục." />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"/>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/dracula.min.css" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
@@ -283,6 +285,9 @@ tr:hover td{background:rgba(255,255,255,.018);}
 .msg.user .msg-bub{background:var(--blue);color:#fff;border-top-right-radius:2px;}
 .msg.ai .msg-bub{background:var(--bg2);border:1px solid var(--bdr);color:var(--txt);border-top-left-radius:2px;}
 .chat-input-area{padding:12px;border-top:1px solid var(--bdr);background:var(--bg2);display:flex;gap:8px;align-items:flex-end;}
+.file-tag{background:var(--bg3);border:1px solid var(--bdr);padding:4px 8px;border-radius:4px;font-size:12px;display:inline-flex;align-items:center;gap:6px;}
+.file-tag-close{cursor:pointer;color:var(--txt2);font-weight:bold;font-size:14px;line-height:1;}
+.file-tag-close:hover{color:#ff4d4f;}
 .chat-input{flex:1;background:var(--bg4);border:1px solid var(--bdr);border-radius:var(--rs);padding:10px 14px;color:var(--txt);font-family:'Inter',sans-serif;font-size:13px;resize:none;min-height:42px;max-height:120px;}
 .chat-input:focus{outline:none;border-color:var(--blue);}
 .btn-send{padding:10px 16px;background:var(--grad);border:none;border-radius:var(--rs);color:#fff;font-weight:700;cursor:pointer;transition:all var(--t);display:flex;align-items:center;justify-content:center;font-family:'Inter',sans-serif;}
@@ -589,9 +594,12 @@ tr:hover td{background:rgba(255,255,255,.018);}
             <div class="msg-bub">Xin chào! Tôi là trợ lý AI chuyên về kiến thức PGE và chuẩn code BRAVO. Tôi có thể giúp gì cho bạn hôm nay?</div>
           </div>
         </div>
-        <div class="chat-input-area">
+        <div class="chat-input-area" style="flex-wrap: wrap;">
+          <div id="file-preview" style="width: 100%; display: none; gap: 8px; margin-bottom: 8px; flex-wrap: wrap;"></div>
+          <input type="file" id="chat-file-input" style="display: none;" accept=".docx,.txt,.sql,.json,.csv" multiple onchange="handleFileSelect(event)">
+          <button class="btn-s btn-sm" onclick="document.getElementById('chat-file-input').click()" title="Đính kèm tài liệu (.docx, .txt, .sql)" style="padding: 10px; border-radius: var(--rs); height: 42px;">📎</button>
           <button class="btn-s btn-sm" onclick="resetGeminiKey()" title="Đổi API Key AI" style="padding: 10px; border-radius: var(--rs); height: 42px;">🔑</button>
-          <textarea class="chat-input" id="chat-input" placeholder="Nhập câu hỏi của bạn... (Enter để gửi, Shift+Enter để xuống dòng)" rows="1" onkeydown="handleChatKey(event)"></textarea>
+          <textarea class="chat-input" id="chat-input" placeholder="Nhập câu hỏi của bạn... (Enter để gửi, Shift+Enter để xuống dòng)" rows="1" onkeydown="handleChatKey(event)" style="flex: 1;"></textarea>
           <button class="btn-send" onclick="sendChatMessage()">Gửi 🚀</button>
         </div>
       </div>
@@ -717,13 +725,11 @@ const db = firebase.firestore();
 // ════════════════════════════════════════════════════
 const ADMIN_CRED = { username:'TANNV', password:'Tien@14051', fullname:'Nguyễn Văn Tân', dept:'IT Admin', role:'admin' };
 
-// Users, history, and reminders now live in Firestore. Local arrays are
-// populated on startup via loadUsers()/loadHistory()/loadReminders() and
-// kept in sync on every write via the Firestore helper functions below.
 let users = [];
 let session = JSON.parse(localStorage.getItem('bravo_session') || 'null');
 let allHistory = [];
 let reminders = [];
+let attachedFilesText = [];
 
 let curSc = 1, curPg = 'converter', histPg = 1;
 const PER_PAGE = 10;
@@ -842,12 +848,10 @@ function logoutAuth() {
 }
 
 // ════════════════════════════════════════════════════
-//  STARTUP — load Firestore data, then check session
+//  STARTUP
 // ════════════════════════════════════════════════════
 window.addEventListener('DOMContentLoaded', async () => {
   await Promise.all([loadUsers(), loadHistory(), loadReminders()]);
-
-  // Auto-fill remembered password
   const rem = localStorage.getItem('bravo_remember');
   if (rem) {
     try {
@@ -857,9 +861,7 @@ window.addEventListener('DOMContentLoaded', async () => {
       document.getElementById('l-remember').checked = true;
     } catch(e) {}
   }
-
   if (session) {
-    // Verify session still valid
     const u = findUser(session.username);
     if (u && u.status === 'approved') {
       launchApp(session);
@@ -872,28 +874,22 @@ window.addEventListener('DOMContentLoaded', async () => {
       clearSession();
     }
   }
-
-  // Set default reminder time
   const dt = new Date(); dt.setHours(dt.getHours() + 1); dt.setMinutes(0);
   const rtime = document.getElementById('r-rtime');
   if (rtime) rtime.value = dt.toISOString().slice(0,16);
 });
 
 // ════════════════════════════════════════════════════
-//  LOGIN
+//  LOGIN & REGISTER
 // ════════════════════════════════════════════════════
 function doLogin() {
   const username = document.getElementById('l-user').value.trim();
   const password = document.getElementById('l-pass').value;
   const remember = document.getElementById('l-remember').checked;
-
   if (!username || !password) { showAuthMsg('login-msg','er','Vui lòng nhập đầy đủ thông tin'); return; }
-
   const btn = document.getElementById('btn-login');
   btn.disabled = true; btn.textContent = '⏳ Đang kiểm tra...';
-
   setTimeout(() => {
-    // Check admin
     if (username.toUpperCase() === ADMIN_CRED.username && password === ADMIN_CRED.password) {
       const u = { username: ADMIN_CRED.username, fullname: ADMIN_CRED.fullname, role: 'admin', dept: ADMIN_CRED.dept };
       if (remember) localStorage.setItem('bravo_remember', JSON.stringify({u:username,p:password}));
@@ -902,19 +898,9 @@ function doLogin() {
       launchApp(u);
       return;
     }
-
-    // Check regular user
     const user = findUser(username);
-    if (!user) {
-      showAuthMsg('login-msg','er','Tài khoản không tồn tại. Vui lòng đăng ký.');
-      btn.disabled = false; btn.textContent = '🚀 Đăng nhập';
-      return;
-    }
-    if (user.password !== password) {
-      showAuthMsg('login-msg','er','Mật khẩu không đúng.');
-      btn.disabled = false; btn.textContent = '🚀 Đăng nhập';
-      return;
-    }
+    if (!user) { showAuthMsg('login-msg','er','Tài khoản không tồn tại.'); btn.disabled = false; btn.textContent = '🚀 Đăng nhập'; return; }
+    if (user.password !== password) { showAuthMsg('login-msg','er','Mật khẩu không đúng.'); btn.disabled = false; btn.textContent = '🚀 Đăng nhập'; return; }
     if (user.status === 'pending') {
       saveSession({ username: user.username, fullname: user.fullname, role: 'user', dept: user.dept });
       document.getElementById('form-login').style.display = 'none';
@@ -923,13 +909,6 @@ function doLogin() {
       btn.disabled = false; btn.textContent = '🚀 Đăng nhập';
       return;
     }
-    if (user.status === 'rejected') {
-      showAuthMsg('login-msg','er','Tài khoản đã bị từ chối. Liên hệ Admin.');
-      btn.disabled = false; btn.textContent = '🚀 Đăng nhập';
-      return;
-    }
-
-    // Approved user
     user.lastLogin = new Date().toISOString();
     saveUser(user);
     if (remember) localStorage.setItem('bravo_remember', JSON.stringify({u:username,p:password}));
@@ -940,169 +919,47 @@ function doLogin() {
   }, 500);
 }
 
-// ════════════════════════════════════════════════════
-//  REGISTER
-// ════════════════════════════════════════════════════
 async function doRegister() {
   const username = document.getElementById('r-user').value.trim();
   const fullname = document.getElementById('r-name').value.trim();
   const email = document.getElementById('r-email').value.trim();
-  const dept = document.getElementById('r-dept').value.trim();
   const password = document.getElementById('r-pass').value;
   const password2 = document.getElementById('r-pass2').value;
-
-  if (!username || !fullname || !email || !password) { showAuthMsg('reg-msg','er','Vui lòng điền đầy đủ các trường bắt buộc (*)'); return; }
-  if (!/^[a-zA-Z0-9_]+$/.test(username)) { showAuthMsg('reg-msg','er','Username chỉ được dùng chữ, số và dấu gạch dưới'); return; }
-  if (username.toUpperCase() === 'TANNV') { showAuthMsg('reg-msg','er','Username này đã được sử dụng'); return; }
-  if (password.length < 6) { showAuthMsg('reg-msg','er','Mật khẩu phải có ít nhất 6 ký tự'); return; }
+  if (!username || !fullname || !email || !password) { showAuthMsg('reg-msg','er','Vui lòng điền đầy đủ thông tin'); return; }
   if (password !== password2) { showAuthMsg('reg-msg','er','Mật khẩu xác nhận không khớp'); return; }
-  if (findUser(username)) { showAuthMsg('reg-msg','er','Username này đã tồn tại, vui lòng chọn username khác'); return; }
-
-  const btn = document.getElementById('btn-reg');
-  btn.disabled = true; btn.textContent = '⏳ Đang tạo tài khoản...';
-
-  const newUser = {
-    username, fullname, email, dept, password,
-    status: 'pending',
-    createdAt: new Date().toISOString(),
-    lastLogin: null,
-    approvedAt: null,
-    approvedBy: null
-  };
+  const newUser = { username, fullname, email, dept: document.getElementById('r-dept').value.trim(), password, status: 'pending', createdAt: new Date().toISOString() };
   users.push(newUser);
   await saveUser(newUser);
   updatePendingBadge();
-
-  showAuthMsg('reg-msg','ok','✅ Tài khoản đã được tạo! Vui lòng chờ Admin (TANNV) phê duyệt.');
-  btn.disabled = false; btn.textContent = '✨ Tạo tài khoản';
-
-  setTimeout(() => {
-    saveSession({ username, fullname, role:'user', dept });
-    document.getElementById('form-register').style.display = 'none';
-    document.getElementById('form-pending').style.display = 'block';
-    document.getElementById('pending-uname').textContent = username;
-  }, 1800);
+  showAuthMsg('reg-msg','ok','✅ Tài khoản đã được tạo! Chờ Admin duyệt.');
 }
 
-function checkApproval() {
-  if (!session) return;
-  loadUsers().then(() => {
-    const u = findUser(session.username);
-    if (u && u.status === 'approved') {
-      toast('ok','Đã được duyệt!','Đang khởi động ứng dụng...');
-      setTimeout(() => { session.role = 'user'; saveSession(session); launchApp(session); }, 1000);
-    } else {
-      toast('wa','Chưa được duyệt','Vui lòng liên hệ Admin TANNV');
-    }
-  });
-}
-
-// ════════════════════════════════════════════════════
-//  LAUNCH APP
-// ════════════════════════════════════════════════════
 function launchApp(u) {
   document.getElementById('auth-screen').style.display = 'none';
   document.getElementById('main-app').style.display = 'flex';
-
-  // Set sidebar user info
   const isAdmin = u.role === 'admin';
   document.getElementById('sb-av').className = 'sb-user-av ' + (isAdmin ? 'av-admin' : 'av-user');
-  if (u.avatar) {
-    document.getElementById('sb-av').innerHTML = `<img src="${u.avatar}" alt="Avatar"/>`;
-  } else {
-    document.getElementById('sb-av').textContent = u.username.slice(0,2).toUpperCase();
-  }
   document.getElementById('sb-uname').textContent = u.fullname || u.username;
   document.getElementById('sb-urole').textContent = isAdmin ? '🛡️ Administrator' : '👤 ' + (u.dept || 'User');
-
-  // Show admin nav
   if (isAdmin) {
     document.getElementById('admin-nav-group').style.display = 'block';
-    document.getElementById('h-user-filter').style.display = '';
-    document.getElementById('th-user').style.display = '';
-    document.getElementById('hist-pg-sub').textContent = 'Tất cả lịch sử chuyển đổi (Admin view)';
     updatePendingBadge();
-    rebuildUserFilter();
   }
-
-  // Init CodeMirror
-  edIn = CodeMirror.fromTextArea(document.getElementById('inp'), {
-    mode:'text/x-sql', theme:'dracula', lineNumbers:true,
-    matchBrackets:true, styleActiveLine:true, lineWrapping:true,
-    extraKeys:{'Ctrl-Enter':runConvert,'Cmd-Enter':runConvert}
-  });
-  edOut = CodeMirror.fromTextArea(document.getElementById('out'), {
-    mode:'text/x-sql', theme:'dracula', lineNumbers:true, readOnly:true, lineWrapping:true
-  });
-  edIn.on('change', updateInpStat);
-
+  edIn = CodeMirror.fromTextArea(document.getElementById('inp'), { mode:'text/x-sql', theme:'dracula', lineNumbers:true, matchBrackets:true, styleActiveLine:true, lineWrapping:true });
+  edOut = CodeMirror.fromTextArea(document.getElementById('out'), { mode:'text/x-sql', theme:'dracula', lineNumbers:true, readOnly:true, lineWrapping:true });
+  document.querySelectorAll('.ni[data-page]').forEach(el => el.addEventListener('click', () => nav(el.dataset.page)));
   setScenario(1, document.querySelector('.sc-tab[data-sc="1"]'));
-  updateSidebar();
   renderRems();
-  checkRems();
-  setInterval(checkRems, 60000);
-
-  // Nav
-  document.querySelectorAll('.ni[data-page]').forEach(el => {
-    el.addEventListener('click', () => nav(el.dataset.page));
-  });
-
-  document.addEventListener('keydown', e => {
-    if ((e.ctrlKey||e.metaKey) && e.key==='Enter') { e.preventDefault(); runConvert(); }
-    if (e.key==='Escape') closeMoDirect();
-  });
-
-  toast('ok', `Xin chào, ${u.fullname || u.username}!`, isAdmin ? 'Đã đăng nhập với quyền Admin' : 'Chào mừng trở lại!');
 }
 
-function doLogout() {
-  if (!confirm('Đăng xuất khỏi BRAVO Converter?')) return;
-  clearSession();
-  location.reload();
-}
-
-// ════════════════════════════════════════════════════
-//  NAVIGATION
-// ════════════════════════════════════════════════════
 function nav(pg) {
   curPg = pg;
   document.querySelectorAll('.page').forEach(p => p.classList.remove('act'));
   document.querySelectorAll('.ni').forEach(n => n.classList.remove('act'));
   document.getElementById('page-' + pg).classList.add('act');
-  const ni = document.querySelector(`.ni[data-page="${pg}"]`);
-  if (ni) ni.classList.add('act');
-  const titles = { converter:'⚡ SQL Converter', history:'📋 Lịch sử', reports:'📊 Báo cáo', usermgmt:'👥 Quản lý User', admin:'🛡️ Admin Dashboard' };
-  document.getElementById('pg-title').textContent = titles[pg] || pg;
+  document.querySelector(`.ni[data-page="${pg}"]`)?.classList.add('act');
   if (pg==='history') renderHist();
-  if (pg==='reports') { renderRptStats(); renderCharts(); }
-  if (pg==='admin') { renderAdmStats(); renderAdmCharts(); renderAdmActs(); }
-  if (pg==='usermgmt') { renderUserMgmt(); }
 }
-
-// ════════════════════════════════════════════════════
-//  SCENARIO
-// ════════════════════════════════════════════════════
-const SC_DESC = {
-  1:`<strong>Kịch bản 1 [MẶC ĐỊNH]: Procedure → SETOF refcursor</strong><br>
-Áp dụng cho STORED PROCEDURE trả về dữ liệu hoặc có tham số OUTPUT.<br>
-• Tên hàm: đổi tiền tố <code>usp_</code> → <code>ufn_</code> • Trả về <code>RETURNS SETOF refcursor</code><br>
-• Tham số OUTPUT → tiền tố <code>pout_</code>, trả qua <code>_ref_out</code> ở vị trí đầu tiên<br>
-• Tham số vào: tiền tố <code>p_</code> | Biến cục bộ: tiền tố <code>_</code> | Con trỏ: tiền tố <code>_ref</code>`,
-  2:`<strong>Kịch bản 2: Trigger</strong><br>
-Chuyển T-SQL Trigger → hàm <code>_running</code> + các CREATE TRIGGER riêng biệt.<br>
-• Phân nhánh logic bằng <code>TG_OP</code> ('INSERT','UPDATE','DELETE')<br>
-• <code>inserted</code> → INSERT/UPDATE | <code>deleted</code> → UPDATE/DELETE<br>
-• <code>REFERENCING NEW TABLE AS inserted / OLD TABLE AS deleted</code><br>
-• <code>WHEN (pg_trigger_depth() = 0)</code> chống đệ quy | Không dùng <code>dbo.</code> ở tên trigger`,
-  3:`<strong>Kịch bản 3: Dịch tương đương (VIEW, FUNCTION, PROCEDURE không trả data, Snippet)</strong><br>
-• <code>CREATE VIEW</code> → <code>CREATE OR REPLACE VIEW</code><br>
-• <code>CREATE FUNCTION</code> → <code>CREATE OR REPLACE FUNCTION</code>, giữ nguyên kiểu trả về<br>
-• <code>CREATE PROCEDURE</code> (không trả dữ liệu) → <code>CREATE OR REPLACE PROCEDURE</code>`
-};
-const SC_TAGS={1:'dtag-sp',2:'dtag-tr',3:'dtag-eq'};
-const SC_LABELS={1:'📦 Procedure',2:'⚡ Trigger',3:'🔄 Tương đương'};
-const SC_AVAT={1:'av-bl',2:'av-pk',3:'av-gr'};
-const SC_ICO={1:'📦',2:'⚡',3:'🔄'};
 
 function setScenario(n, el) {
   curSc = n;
@@ -1111,517 +968,14 @@ function setScenario(n, el) {
   document.getElementById('sc-desc').innerHTML = SC_DESC[n];
 }
 
-// ════════════════════════════════════════════════════
-//  CONVERTER ENGINE (BRAVO Rules from srciptAI.txt)
-// ════════════════════════════════════════════════════
+const SC_DESC = {
+  1:`<strong>KB1: Procedure → refcursor</strong>`,
+  2:`<strong>KB2: Trigger</strong>`,
+  3:`<strong>KB3: Tương đương</strong>`
+};
+
 function runConvert() {
   const sql = edIn.getValue().trim();
-  if (!sql) { toast('inf','Trống','Vui lòng nhập T-SQL'); return; }
-  const btn = document.getElementById('btn-conv');
-  btn.disabled = true; btn.textContent = '⏳ Đang xử lý...';
-  showProg();
-  setTimeout(() => {
-    const t0 = performance.now();
-    try {
-      const { result, log } = convertTSQL(sql, curSc);
-      const ms = (performance.now() - t0).toFixed(1);
-      edOut.setValue(result);
-      document.getElementById('out-stat').textContent = result.length + ' ký tự';
-      document.getElementById('conv-time').textContent = `⏱ ${ms}ms`;
-      renderLog(log);
-      const rec = { id:Date.now(), ts:new Date().toISOString(), sc:curSc, input:sql, output:result, changes:log.length, status:'success', ms, owner: session.username };
-      allHistory.unshift(rec);
-      addHistoryRec(rec);
-      updateSidebar();
-      toast('ok','Thành công!',`${log.length} quy tắc — ${ms}ms`);
-    } catch(e) { toast('er','Lỗi',e.message); }
-    hideProg();
-    btn.disabled=false; btn.textContent='⚡ Chuyển đổi ngay';
-  }, 280);
-}
-
-function convertTSQL(sql, scenario) {
-  let r = sql; const log = [];
-  const apply = (from, to, label, type) => {
-    const before = r; r = r.replace(from, to);
-    if (r !== before) log.push({ t:type, msg:label });
-  };
-  // Custom dbo types
-  apply(/\bdbo\.CodeType\b/gi,'VARCHAR(24)','dbo.CodeType→VARCHAR(24)','dtype');
-  apply(/\bdbo\.ExchangeRateType\b/gi,'NUMERIC(15,5)','dbo.ExchangeRateType→NUMERIC(15,5)','dtype');
-  apply(/\bdbo\.MoneyType\b/gi,'NUMERIC(18,2)','dbo.MoneyType→NUMERIC(18,2)','dtype');
-  apply(/\bdbo\.PercentageType\b/gi,'NUMERIC(8,4)','dbo.PercentageType→NUMERIC(8,4)','dtype');
-  apply(/\bdbo\.PriceType\b/gi,'NUMERIC(18,5)','dbo.PriceType→NUMERIC(18,5)','dtype');
-  apply(/\bdbo\.QuantityType\b/gi,'NUMERIC(16,5)','dbo.QuantityType→NUMERIC(16,5)','dtype');
-  apply(/\bdbo\.UniqueKeyType\b/gi,'VARCHAR(16)','dbo.UniqueKeyType→VARCHAR(16)','dtype');
-  // Data types
-  apply(/\bNVARCHAR\s*\(\s*MAX\s*\)/gi,'TEXT','NVARCHAR(MAX)→TEXT','dtype');
-  apply(/\bVARCHAR\s*\(\s*MAX\s*\)/gi,'TEXT','VARCHAR(MAX)→TEXT','dtype');
-  apply(/\bNVARCHAR\b/gi,'VARCHAR','NVARCHAR→VARCHAR','dtype');
-  apply(/\bNTEXT\b/gi,'TEXT','NTEXT→TEXT','dtype');
-  apply(/\bNCHAR\b/gi,'CHAR','NCHAR→CHAR','dtype');
-  apply(/\bDATETIMEOFFSET\b/gi,'TIMESTAMPTZ','DATETIMEOFFSET→TIMESTAMPTZ','dtype');
-  apply(/\bDATETIME2\b/gi,'TIMESTAMP','DATETIME2→TIMESTAMP','dtype');
-  apply(/\bDATETIME\b/gi,'TIMESTAMP','DATETIME→TIMESTAMP','dtype');
-  apply(/\bSMALLDATETIME\b/gi,'TIMESTAMP','SMALLDATETIME→TIMESTAMP','dtype');
-  apply(/\bUNIQUEIDENTIFIER\b/gi,'UUID','UNIQUEIDENTIFIER→UUID','dtype');
-  apply(/\bTINYINT\b/gi,'SMALLINT','TINYINT→SMALLINT','dtype');
-  apply(/\bBIT\b/gi,'BOOLEAN','BIT→BOOLEAN','dtype');
-  apply(/\bMONEY\b/gi,'NUMERIC(18,2)','MONEY→NUMERIC(18,2)','dtype');
-  apply(/\bSMALLMONEY\b/gi,'NUMERIC(10,4)','SMALLMONEY→NUMERIC(10,4)','dtype');
-  apply(/\bIMAGE\b/gi,'BYTEA','IMAGE→BYTEA','dtype');
-  apply(/\bVARBINARY\s*\(\s*MAX\s*\)/gi,'BYTEA','VARBINARY(MAX)→BYTEA','dtype');
-  apply(/\bVARBINARY\b/gi,'BYTEA','VARBINARY→BYTEA','dtype');
-  apply(/\bBINARY\b/gi,'BYTEA','BINARY→BYTEA','dtype');
-  apply(/\bFLOAT\b/gi,'DOUBLE PRECISION','FLOAT→DOUBLE PRECISION','dtype');
-  // Boolean literals
-  apply(/\bIsActive\s*=\s*1\b/gi,'IsActive = TRUE','IsActive=1→TRUE','dtype');
-  apply(/\bIsActive\s*=\s*0\b/gi,'IsActive = FALSE','IsActive=0→FALSE','dtype');
-  // Naming conventions
-  r=r.replace(/@_(\w+)/g,(_,v)=>{log.push({t:'naming',msg:`@_${v}→_${v}`});return `_${v}`;});
-  r=r.replace(/@pout_(\w+)/g,(_,v)=>{log.push({t:'naming',msg:`@pout_${v}→pout_${v}`});return `pout_${v}`;});
-  r=r.replace(/@(\w+)/g,(_,v)=>{log.push({t:'naming',msg:`@${v}→p_${v}`});return `p_${v}`;});
-  // Temp tables
-  apply(/DROP TABLE IF EXISTS #(\w+)/gi,'DROP TABLE IF EXISTS Tmp_$1','#temp DROP→Tmp_','syntax');
-  apply(/#(\w+)/g,'Tmp_$1','#temp→Tmp_','syntax');
-  // Square brackets
-  apply(/\[([^\]]+)\]/g,'$1','[brackets]→bare name','syntax');
-  // Functions
-  apply(/\bGETDATE\s*\(\s*\)/gi,'NOW()','GETDATE()→NOW()','func');
-  apply(/\bGETUTCDATE\s*\(\s*\)/gi,"NOW() AT TIME ZONE 'UTC'",'GETUTCDATE()→NOW() AT TIME ZONE UTC','func');
-  apply(/\bSYSDATETIME\s*\(\s*\)/gi,'NOW()','SYSDATETIME()→NOW()','func');
-  apply(/\bISNULL\s*\(/gi,'COALESCE(','ISNULL()→COALESCE()','func');
-  apply(/\bLEN\s*\(/gi,'LENGTH(','LEN()→LENGTH()','func');
-  apply(/\bCHARINDEX\s*\(\s*([^,]+),\s*([^)]+)\)/gi,'POSITION($1 IN $2)','CHARINDEX→POSITION(x IN y)','func');
-  apply(/\bREPLICATE\s*\(/gi,'REPEAT(','REPLICATE()→REPEAT()','func');
-  apply(/\bPATINDEX\s*\(/gi,'REGEXP_INSTR(','PATINDEX()→REGEXP_INSTR()','func');
-  apply(/\bNEWID\s*\(\s*\)/gi,'gen_random_uuid()','NEWID()→gen_random_uuid()','func');
-  apply(/\bSPACE\s*\(\s*([^)]+)\)/gi,"REPEAT(' ',$1)",'SPACE(n)→REPEAT(" ",n)','func');
-  apply(/\bCEILING\s*\(/gi,'CEIL(','CEILING()→CEIL()','func');
-  apply(/\bRAND\s*\(\s*\)/gi,'RANDOM()','RAND()→RANDOM()','func');
-  apply(/\bIIF\s*\(\s*([^,]+),\s*([^,]+),\s*([^)]+)\)/gi,'CASE WHEN $1 THEN $2 ELSE $3 END','IIF()→CASE WHEN','func');
-  apply(/\bCONVERT\s*\(\s*VARCHAR\s*(?:\(\d+\))?\s*,\s*([^,)]+)\s*,\s*(\d+)\s*\)/gi,"TO_CHAR($1,'YYYY-MM-DD')",'CONVERT(VARCHAR,date,style)→TO_CHAR()','func');
-  apply(/\bCONVERT\s*\(\s*([^,]+),\s*([^)]+)\)/gi,'CAST($2 AS $1)','CONVERT(type,val)→CAST(val AS type)','func');
-  apply(/\bSTR\s*\(\s*([^,)]+)(?:,[^)]*)?\)/gi,'CAST($1 AS VARCHAR)','STR()→CAST AS VARCHAR','func');
-  apply(/\bOUTER\s+APPLY\b/gi,'LEFT OUTER JOIN LATERAL','OUTER APPLY→LEFT OUTER JOIN LATERAL','func');
-  apply(/\bCROSS\s+APPLY\b/gi,'CROSS JOIN LATERAL','CROSS APPLY→CROSS JOIN LATERAL','func');
-  apply(/\bWITH\s*\(\s*NOLOCK\s*\)/gi,'','WITH(NOLOCK) removed','syntax');
-  apply(/\bWITH\s*\(\s*READPAST\s*\)/gi,'','WITH(READPAST) removed','syntax');
-  apply(/\bWITH\s*\(\s*UPDLOCK\s*\)/gi,'','WITH(UPDLOCK) removed','syntax');
-  apply(/^GO\b\s*$/gim,';','GO→;','syntax');
-  apply(/^SET\s+NOCOUNT\s+ON\s*;?$/gim,'-- SET NOCOUNT ON removed','SET NOCOUNT ON→comment','syntax');
-  // TOP N
-  const topVals=[];
-  r=r.replace(/\bSELECT\s+TOP\s+(\d+)\s+/gi,(_,n)=>{topVals.push(n);log.push({t:'syntax',msg:`SELECT TOP ${n}→LIMIT ${n}`});return 'SELECT ';});
-  topVals.forEach(n=>{r=r.replace(/(;?\s*)$/,` LIMIT ${n}$1`);});
-  // usp_ → ufn_ for scenario 1
-  if (scenario===1) { r=r.replace(/\busp_/gi,'ufn_'); log.push({t:'naming',msg:'usp_→ufn_ (KB1)'}); }
-  // EXEC → CALL
-  apply(/\bEXECUTE\s+dbo\./gi,'CALL dbo.','EXECUTE dbo.→CALL dbo.','syntax');
-  apply(/\bEXEC\s+dbo\./gi,'CALL dbo.','EXEC dbo.→CALL dbo.','syntax');
-  apply(/\bPRINT\s+/gi,'RAISE NOTICE ','PRINT→RAISE NOTICE','syntax');
-  apply(/\busp_sys_GenKey\b/gi,'ufn_sys_GenKey','usp_sys_GenKey→ufn_sys_GenKey','naming');
-  // CONTEXT_INFO
-  if (/CONTEXT_INFO\b/i.test(sql)){
-    apply(/\bCONTEXT_INFO\b/gi,"CURRENT_SETTING('my.context_info', true)",'CONTEXT_INFO→CURRENT_SETTING','custom');
-  }
-  // Warnings
-  if (/UPDATE\s+\w+\s+SET[\s\S]*?FROM[\s\S]*?JOIN/i.test(r)) log.push({t:'warn',msg:'⚠️ UPDATE...FROM...JOIN → kiểm tra thủ công: UPDATE target FROM Source WHERE'});
-  if (/\bMERGE\b/i.test(sql)) log.push({t:'merge',msg:'MERGE → cấu trúc BRAVO: WITH merged AS (MERGE ... RETURNING merge_action()...)'});
-  // Scenario wrappers
-  if (scenario===1) r=wrapSc1(r,sql,log);
-  else if (scenario===2) r=wrapSc2(r,sql,log);
-  else r=wrapSc3(r,sql,log);
-  r=r.replace(/\n{3,}/g,'\n\n').replace(/[ \t]+$/gm,'');
-  return { result:r, log };
-}
-
-function wrapSc1(r,original,log){
-  if (/CREATE\s+(?:OR\s+REPLACE\s+)?(?:PROCEDURE|PROC)\b/i.test(r)){
-    const nm=r.match(/CREATE\s+(?:OR\s+REPLACE\s+)?(?:PROCEDURE|PROC)\s+(?:dbo\.)?(\w+)/i);
-    const proc=nm?nm[1]:'my_procedure', fn=proc.replace(/^usp_/i,'ufn_');
-    r=r.replace(/CREATE\s+(?:OR\s+REPLACE\s+)?(?:PROCEDURE|PROC)\s+(?:dbo\.)?(\w+)/gi,`CREATE OR REPLACE FUNCTION dbo.${fn}`);
-    const outParams=[];
-    r=r.replace(/(\w+)\s+([\w()]+)\s+OUTPUT/gi,(m,pname,ptype)=>{
-      const pout=pname.startsWith('pout_')?pname:'pout_'+pname.replace(/^p_/,'');
-      outParams.push({name:pout,type:ptype}); return `${pout} ${ptype} DEFAULT NULL::${ptype}`;
-    });
-    if (!/RETURNS\s+SETOF\s+refcursor/i.test(r)){
-      r=r.replace(/\bAS\b\s*\$\w+\$|\bAS\b\s*BEGIN\b/i,()=>`RETURNS SETOF refcursor\n LANGUAGE plpgsql\nAS $function$\n`);
-    }
-    log.push({t:'custom',msg:`Procedure ${proc} → Function dbo.${fn}() RETURNS SETOF refcursor`});
-    if (outParams.length) {
-      log.push({t:'naming',msg:`OUTPUT params: ${outParams.map(p=>p.name).join(', ')} → _ref_out`});
-      r=r.replace(/\bDECLARE\b/i,`DECLARE\n\t_ref_out refcursor := 'ref_out'; -- OUTPUT: ${outParams.map(p=>p.name).join(', ')}`);
-    }
-  }
-  return r;
-}
-function wrapSc2(r,original,log){
-  const nm=original.match(/CREATE\s+(?:TRIGGER|OR\s+REPLACE\s+TRIGGER)\s+(?:dbo\.)?(\w+)\s+ON\s+(?:dbo\.)?(\w+)/i);
-  if (!nm) return r;
-  const tbl=nm[2], fn=`ufn_${tbl.toLowerCase()}_running`;
-  const hasI=/\bINSERT\b/i.test(original)||/\bINSERTED\b/i.test(original);
-  const hasU=/\bUPDATE\b/i.test(original)||/\bUPDATED\b/i.test(original);
-  const hasD=/\bDELETE\b/i.test(original)||/\bDELETED\b/i.test(original);
-  const trgs=[];
-  if(hasU) trgs.push(`CREATE TRIGGER trg_${tbl.toLowerCase()}_update\n  AFTER UPDATE ON ${tbl}\n  REFERENCING OLD TABLE AS deleted NEW TABLE AS inserted\n  FOR EACH STATEMENT WHEN (pg_trigger_depth() = 0)\n  EXECUTE FUNCTION ${fn}();`);
-  if(hasI) trgs.push(`CREATE TRIGGER trg_${tbl.toLowerCase()}_insert\n  AFTER INSERT ON ${tbl}\n  REFERENCING NEW TABLE AS inserted\n  FOR EACH STATEMENT WHEN (pg_trigger_depth() = 0)\n  EXECUTE FUNCTION ${fn}();`);
-  if(hasD) trgs.push(`CREATE TRIGGER trg_${tbl.toLowerCase()}_delete\n  AFTER DELETE ON ${tbl}\n  REFERENCING OLD TABLE AS deleted\n  FOR EACH STATEMENT WHEN (pg_trigger_depth() = 0)\n  EXECUTE FUNCTION ${fn}();`);
-  const hdr=`-- ═══════════════════════════════════════════════
--- Table: ${tbl} | Function: ${fn}
--- ═══════════════════════════════════════════════
-DROP TRIGGER IF EXISTS trg_${tbl.toLowerCase()}_update ON ${tbl};
-DROP TRIGGER IF EXISTS trg_${tbl.toLowerCase()}_insert ON ${tbl};
-DROP TRIGGER IF EXISTS trg_${tbl.toLowerCase()}_delete ON ${tbl};
-DROP FUNCTION IF EXISTS ${fn}();
-
-CREATE OR REPLACE FUNCTION ${fn}()
-RETURNS TRIGGER LANGUAGE plpgsql
-AS $function$
-BEGIN
-\tIF (TG_OP = 'INSERT') THEN
-\t\t-- Logic INSERT (chỉ dùng inserted)
-
-\tELSIF (TG_OP = 'UPDATE') THEN
-\t\t-- Logic UPDATE (dùng inserted + deleted)
-\t\t-- Kiểm tra: SELECT EXISTS (SELECT 1 FROM inserted i JOIN deleted d ON i.Id=d.Id WHERE i.Col IS DISTINCT FROM d.Col)
-
-\tELSIF (TG_OP = 'DELETE') THEN
-\t\t-- Logic DELETE (chỉ dùng deleted)
-
-\tEND IF;
-\tRETURN NULL;
-END;
-$function$;
-
-${trgs.join('\n\n')}
-`;
-  log.push({t:'trigger',msg:`→ ${fn}() + ${trgs.length} trigger`});
-  return hdr+'\n-- ─── Logic gốc ───\n'+r;
-}
-function wrapSc3(r,sql,log){
-  r=r.replace(/\bCREATE\s+(?!OR\s+REPLACE\s+)VIEW\b/gi,'CREATE OR REPLACE VIEW');
-  r=r.replace(/\bCREATE\s+(?!OR\s+REPLACE\s+)FUNCTION\b/gi,'CREATE OR REPLACE FUNCTION');
-  r=r.replace(/\bCREATE\s+(?!OR\s+REPLACE\s+)PROCEDURE\b/gi,'CREATE OR REPLACE PROCEDURE');
-  log.push({t:'syntax',msg:'CREATE→CREATE OR REPLACE'});
-  return r;
-}
-
-// ════════════════════════════════════════════════════
-//  EDITOR UTILS
-// ════════════════════════════════════════════════════
-function updateInpStat(){const v=edIn.getValue();document.getElementById('inp-stat').textContent=`${v.length} ký tự • ${v.split('\n').length} dòng`;}
-function showProg(){const p=document.getElementById('prog'),b=document.getElementById('prog-bar');p.classList.add('on');b.style.width='0%';let pct=0;const iv=setInterval(()=>{pct+=Math.random()*22;if(pct>82)pct=82;b.style.width=pct+'%';},70);setTimeout(()=>{clearInterval(iv);b.style.width='100%';setTimeout(()=>{p.classList.remove('on');b.style.width='0%';},500);},320);}
-function hideProg(){}
-function renderLog(log){
-  const box=document.getElementById('logbox'),list=document.getElementById('loglist');
-  document.getElementById('logcnt').textContent=log.length+' thay đổi';
-  if(!log.length){box.style.display='none';return;}
-  box.style.display='block';
-  const cls={dtype:'b-dtype',func:'b-func',syntax:'b-syntax',naming:'b-naming',trigger:'b-trigger',merge:'b-merge',custom:'b-custom',warn:'b-warn'};
-  const lbl={dtype:'TYPE',func:'FUNC',syntax:'SYNTAX',naming:'NAMING',trigger:'TRIGGER',merge:'MERGE',custom:'CUSTOM',warn:'⚠ WARN'};
-  list.innerHTML=log.map(l=>`<div class="log-item"><span class="li-badge ${cls[l.t]||'b-custom'}">${lbl[l.t]||l.t.toUpperCase()}</span><span style="color:var(--txt2)">${l.msg}</span></div>`).join('');
-}
-function clearEditors(){if(edIn)edIn.setValue('');if(edOut)edOut.setValue('');document.getElementById('logbox').style.display='none';document.getElementById('conv-time').textContent='';}
-function copyOut(){const v=edOut.getValue();if(!v.trim()){toast('inf','Trống','');return;}navigator.clipboard.writeText(v).then(()=>toast('ok','Đã copy!','PostgreSQL SQL đã được sao chép'));}
-function dlOut(){const v=edOut.getValue();if(!v.trim()){toast('inf','Trống','');return;}const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([v],{type:'text/plain'}));a.download='bravo_pg_'+Date.now()+'.sql';a.click();toast('ok','Đã tải!','');}
-function formatInput(){let s=edIn.getValue();['SELECT','FROM','WHERE','AND','OR','ORDER BY','GROUP BY','HAVING','INNER JOIN','LEFT OUTER JOIN','LEFT JOIN','RIGHT JOIN','ON','INSERT INTO','VALUES','UPDATE','SET','DELETE','CREATE TABLE','ALTER TABLE'].forEach(k=>{s=s.replace(new RegExp('\\b'+k+'\\b','gi'),'\n'+k);});s=s.replace(/\n{2,}/g,'\n').trim();edIn.setValue(s);toast('ok','Đã format','');}
-function saveNow(){const i=edIn.getValue().trim(),o=edOut.getValue().trim();if(!i||!o){toast('inf','Chưa đủ','Hãy convert trước');return;}const rec={id:Date.now(),ts:new Date().toISOString(),sc:curSc,input:i,output:o,changes:0,status:'success',ms:0,owner:session.username};allHistory.unshift(rec);addHistoryRec(rec);updateSidebar();toast('ok','Đã lưu!','');}
-function loadSample(){
-  const s={
-    1:`CREATE PROCEDURE dbo.usp_B30AccDoc_GetData\n\t@_DocDate1\t\tDATETIME = NULL,\n\t@_DocDate2\t\tDATETIME = NULL,\n\t@_BranchCode\tNVARCHAR(24) = NULL,\n\t@pout_LayoutXML\tNVARCHAR(MAX) OUTPUT,\n\t@pout_ColCount\tSMALLINT OUTPUT\nAS\nBEGIN\n\tSET NOCOUNT ON;\n\tSELECT @pout_LayoutXML = N'<DefaultReport></DefaultReport>', @pout_ColCount = 5\n\tSELECT TOP 100\n\t\t[d].[Id], [d].[DocNo], [d].[DocDate],\n\t\tISNULL([d].[BranchCode], N'') AS BranchCode,\n\t\tCONVERT(VARCHAR(10), [d].[DocDate], 120) AS DocDateStr\n\tFROM [dbo].[B30AccDoc] [d] WITH(NOLOCK)\n\tWHERE [d].[IsActive] = 1\n\t\tAND ([d].[DocDate] >= @_DocDate1 OR @_DocDate1 IS NULL)\n\tORDER BY [d].[DocDate] DESC;\nEND\nGO`,
-    2:`CREATE TRIGGER dbo.trg_B30AccDocItem_Upd\nON dbo.B30AccDocItem\nAFTER INSERT, UPDATE, DELETE\nAS\nBEGIN\n\tSET NOCOUNT ON;\n\tUPDATE a SET a.Amount = a.Amount + i.Amount - d.Amount\n\tFROM dbo.B30AccDoc a\n\tINNER JOIN inserted i ON a.Id = i.DocId\n\tINNER JOIN deleted d ON a.Id = d.DocId;\nEND\nGO`,
-    3:`CREATE VIEW dbo.vB30AccDocSummary\nAS\nSELECT d.Id, d.DocNo, d.DocDate, d.BranchCode,\n\tISNULL(b.BranchName, N'Unknown') AS BranchName,\n\tLEN(d.Description) AS DescLength,\n\tSUM(i.Amount) AS TotalAmount\nFROM dbo.B30AccDoc d WITH(NOLOCK)\n\tLEFT OUTER JOIN dbo.B20Branch b WITH(NOLOCK) ON d.BranchCode = b.Code\n\tINNER JOIN dbo.B30AccDocItem i WITH(NOLOCK) ON d.Id = i.DocId\nWHERE d.IsActive = 1\nGROUP BY d.Id, d.DocNo, d.DocDate, d.BranchCode, b.BranchName, d.Description;\nGO`
-  };
-  if(edIn)edIn.setValue(s[curSc]||s[1]);
-  toast('inf','Đã tải mẫu','Ctrl+Enter để convert');
-}
-
-// ════════════════════════════════════════════════════
-//  HISTORY
-// ════════════════════════════════════════════════════
-function myHistory(){return session?.role==='admin'?allHistory:allHistory.filter(r=>r.owner===session?.username);}
-function updateSidebar(){
-  const my=myHistory();
-  document.getElementById('ss-total').textContent=my.length;
-  const today=new Date().toDateString();
-  document.getElementById('ss-today').textContent=my.filter(r=>new Date(r.ts).toDateString()===today).length;
-  document.getElementById('hbdg').textContent=my.length;
-  updatePendingBadge();
-}
-function updatePendingBadge(){
-  const cnt=users.filter(u=>u.status==='pending').length;
-  const b=document.getElementById('pending-bdg');
-  if(b)b.textContent=cnt;
-}
-function rebuildUserFilter(){
-  const sel=document.getElementById('h-user-filter');
-  if(!sel)return;
-  const unames=[...new Set(allHistory.map(r=>r.owner))];
-  sel.innerHTML='<option value="">Tất cả user</option>'+unames.map(u=>`<option value="${u}">${u}</option>`).join('');
-}
-
-function renderHist(){
-  const isAdmin=session?.role==='admin';
-  const data0=isAdmin?allHistory:allHistory.filter(r=>r.owner===session?.username);
-  const search=(document.getElementById('h-search')?.value||'').toLowerCase();
-  const fSc=document.getElementById('h-sc')?.value||'';
-  const fDate=document.getElementById('h-date')?.value||'';
-  const fUser=isAdmin?(document.getElementById('h-user-filter')?.value||''):'';
-
-  let data=data0.filter(r=>{
-    if(search&&!r.input.toLowerCase().includes(search))return false;
-    if(fSc&&String(r.sc)!==fSc)return false;
-    if(fUser&&r.owner!==fUser)return false;
-    if(fDate){const ts=new Date(r.ts),now=new Date();
-      if(fDate==='today'&&ts.toDateString()!==now.toDateString())return false;
-      if(fDate==='week'&&(now-ts)>7*864e5)return false;
-      if(fDate==='month'&&(now-ts)>30*864e5)return false;}
-    return true;
-  });
-
-  const total=data.length,pages=Math.ceil(total/PER_PAGE)||1;
-  if(histPg>pages)histPg=1;
-  const start=(histPg-1)*PER_PAGE,page=data.slice(start,start+PER_PAGE);
-  const tbody=document.getElementById('h-tbody'),empty=document.getElementById('h-empty'),pagi=document.getElementById('h-pagi');
-
-  if(!page.length){tbody.innerHTML='';empty.style.display='block';pagi.innerHTML='';return;}
-  empty.style.display='none';
-
-  tbody.innerHTML=page.map((r,i)=>{
-    const dt=new Date(r.ts),ds=dt.toLocaleDateString('vi-VN')+' '+dt.toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'});
-    const scTag=`<span class="dtag ${SC_TAGS[r.sc]||'dtag-eq'}">${SC_LABELS[r.sc]||'KB'+r.sc}</span>`;
-    const prev=r.input.replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,' ').slice(0,70);
-    const userCell=isAdmin?`<td><span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--cyan)">${r.owner||'?'}</span></td>`:'';
-    return `<tr>
-      <td style="color:var(--txt3)">${start+i+1}</td>
-      <td><span style="font-size:11px">${ds}</span></td>
-      ${userCell}
-      <td>${scTag}</td>
-      <td><div class="code-prev">${prev}…</div></td>
-      <td><span style="color:var(--blue);font-weight:800">${r.changes}</span></td>
-      <td><span class="stag stag-${r.status==='success'?'ok':'er'}">● ${r.status==='success'?'OK':'Lỗi'}</span></td>
-      <td style="white-space:nowrap">
-        <button class="btn btn-s btn-sm" onclick="viewRec(${r.id})">👁</button>
-        <button class="btn btn-s btn-sm" onclick="restoreRec(${r.id})" style="margin-left:3px">⚡</button>
-        ${isAdmin||r.owner===session?.username?`<button class="btn btn-d btn-sm" onclick="delRec(${r.id})" style="margin-left:3px">✕</button>`:''}
-      </td>
-    </tr>`;
-  }).join('');
-
-  let pg='';
-  if(histPg>1)pg+=`<button class="pbtn" onclick="goPg(${histPg-1})">‹</button>`;
-  for(let p=Math.max(1,histPg-2);p<=Math.min(pages,histPg+2);p++)pg+=`<button class="pbtn${p===histPg?' act':''}" onclick="goPg(${p})">${p}</button>`;
-  if(histPg<pages)pg+=`<button class="pbtn" onclick="goPg(${histPg+1})">›</button>`;
-  pg+=`<span style="font-size:11px;color:var(--txt3);margin-left:7px">${total} kết quả</span>`;
-  pagi.innerHTML=pg;
-}
-function goPg(p){histPg=p;renderHist();}
-function clearMyHist(){
-  if(!confirm('Xóa toàn bộ lịch sử của bạn?'))return;
-  const uname = session?.username;
-  allHistory=allHistory.filter(r=>r.owner!==uname);
-  clearMyHistFirestore(uname);
-  updateSidebar();renderHist();
-  toast('inf','Đã xóa lịch sử của bạn','');
-}
-function delRec(id){allHistory=allHistory.filter(r=>r.id!==id);deleteHistoryRec(id);updateSidebar();renderHist();toast('inf','Đã xóa','');}
-
-function viewRec(id){
-  const r=allHistory.find(x=>x.id===id);if(!r)return;
-  moRecord=r;
-  document.getElementById('mo-title').textContent=`Chi tiết #${r.id} — ${new Date(r.ts).toLocaleString('vi-VN')} [${r.owner}]`;
-  document.getElementById('mo-body').innerHTML=`
-    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">
-      <div class="sc bl" style="padding:10px 13px;flex:1;min-width:120px"><div style="font-size:9.5px;color:var(--txt3)">Kịch bản</div><div style="font-size:13px;font-weight:800;margin-top:2px">${SC_LABELS[r.sc]||r.sc}</div></div>
-      <div class="sc gr" style="padding:10px 13px;flex:1;min-width:120px"><div style="font-size:9.5px;color:var(--txt3)">Rules áp dụng</div><div style="font-size:13px;font-weight:800;margin-top:2px">${r.changes}</div></div>
-      <div class="sc or" style="padding:10px 13px;flex:1;min-width:120px"><div style="font-size:9.5px;color:var(--txt3)">Thời gian xử lý</div><div style="font-size:13px;font-weight:800;margin-top:2px">${r.ms}ms</div></div>
-      <div class="sc pu" style="padding:10px 13px;flex:1;min-width:120px"><div style="font-size:9.5px;color:var(--txt3)">Người dùng</div><div style="font-size:13px;font-weight:800;margin-top:2px">${r.owner||'?'}</div></div>
-    </div>
-    <div class="mo-grid">
-      <div><div style="font-size:11px;font-weight:700;color:var(--txt3);margin-bottom:6px">📥 T-SQL Input</div><div class="mo-code">${r.input.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div></div>
-      <div><div style="font-size:11px;font-weight:700;color:var(--txt3);margin-bottom:6px">📤 PostgreSQL Output</div><div class="mo-code" style="border-color:rgba(16,185,129,.22)">${r.output.replace(/</g,'&lt;').replace(/>/g,'&gt;')}</div></div>
-    </div>`;
-  document.getElementById('modal').classList.add('on');
-}
-function restoreRec(id){
-  const r=allHistory.find(x=>x.id===id);if(!r)return;
-  if(edIn)edIn.setValue(r.input);if(edOut)edOut.setValue(r.output);curSc=r.sc;
-  document.querySelectorAll('.sc-tab').forEach(t=>t.classList.remove('act'));
-  const tab=document.querySelector(`.sc-tab[data-sc="${r.sc}"]`);
-  if(tab){tab.classList.add('act');setScenario(r.sc,tab);}
-  nav('converter');toast('ok','Đã restore!','');
-}
-function restoreMo(){if(moRecord)restoreRec(moRecord.id);closeMoDirect();}
-function closeMo(e){if(e.target===document.getElementById('modal'))closeMoDirect();}
-function closeMoDirect(){document.getElementById('modal').classList.remove('on');}
-
-// ════════════════════════════════════════════════════
-//  USER MANAGEMENT (Admin only)
-// ════════════════════════════════════════════════════
-function renderUserMgmt() {
-  renderUserStats();
-  renderUserTable();
-  const pending=users.filter(u=>u.status==='pending');
-  const alert=document.getElementById('pending-alert');
-  if(pending.length>0){
-    alert.style.display='flex';
-    document.getElementById('pending-alert-txt').textContent=`${pending.length} tài khoản đang chờ: ${pending.map(u=>u.username).join(', ')}`;
-  } else { alert.style.display='none'; }
-}
-
-function renderUserStats(){
-  const total=users.length,approved=users.filter(u=>u.status==='approved').length;
-  const pending=users.filter(u=>u.status==='pending').length,rejected=users.filter(u=>u.status==='rejected').length;
-  document.getElementById('um-stats').innerHTML=`
-    <div class="sc bl"><div class="sc-ico">👥</div><div class="sc-val">${total+1}</div><div class="sc-lbl">Tổng số tài khoản</div><span class="sc-trend tn">+1 admin</span></div>
-    <div class="sc gr"><div class="sc-ico">✅</div><div class="sc-val">${approved}</div><div class="sc-lbl">Đã phê duyệt</div><span class="sc-trend tu">approved</span></div>
-    <div class="sc or"><div class="sc-ico">⏳</div><div class="sc-val">${pending}</div><div class="sc-lbl">Chờ duyệt</div><span class="sc-trend ${pending>0?'tu':'tn'}">${pending>0?'⚠️ cần duyệt':'ok'}</span></div>
-    <div class="sc rd"><div class="sc-ico">❌</div><div class="sc-val">${rejected}</div><div class="sc-lbl">Từ chối</div><span class="sc-trend tn">rejected</span></div>`;
-}
-
-function renderUserTable(){
-  const search=(document.getElementById('um-search')?.value||'').toLowerCase();
-  const fStatus=document.getElementById('um-status')?.value||'';
-  const tbody=document.getElementById('um-tbody'),empty=document.getElementById('um-empty');
-
-  // Include admin as first row
-  const adminRow = { ...ADMIN_CRED, status:'approved', createdAt:null, lastLogin:null, isAdmin:true };
-  let list=[adminRow,...users].filter(u=>{
-    if(search&&!u.username.toLowerCase().includes(search)&&!u.fullname.toLowerCase().includes(search)&&!(u.email||'').toLowerCase().includes(search))return false;
-    if(fStatus&&u.status!==fStatus)return false;
-    return true;
-  });
-
-  if(!list.length){tbody.innerHTML='';empty.style.display='block';return;}
-  empty.style.display='none';
-
-  tbody.innerHTML=list.map((u,i)=>{
-    const statusHtml=u.isAdmin
-      ?`<span class="user-status" style="background:rgba(239,68,68,.14);color:var(--red)">🛡️ Admin</span>`
-      :`<span class="user-status us-${u.status}">${{approved:'✅ Đã duyệt',pending:'⏳ Chờ duyệt',rejected:'❌ Từ chối'}[u.status]||u.status}</span>`;
-    const created=u.createdAt?new Date(u.createdAt).toLocaleDateString('vi-VN'):'-';
-    const lastLogin=u.lastLogin?new Date(u.lastLogin).toLocaleString('vi-VN',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'-';
-    const actions=u.isAdmin?'<span style="color:var(--txt3);font-size:11px">—</span>'
-      :`${u.status==='pending'?`<button class="btn btn-g btn-sm" onclick="approveUser('${u.username}')">✅ Duyệt</button> <button class="btn btn-d btn-sm" onclick="rejectUser('${u.username}')">❌ Từ chối</button>`:''}
-       ${u.status==='approved'?`<button class="btn btn-o btn-sm" onclick="suspendUser('${u.username}')">⏸ Tạm dừng</button>`:''}
-       ${u.status==='rejected'?`<button class="btn btn-g btn-sm" onclick="approveUser('${u.username}')">↩ Mở lại</button>`:''}
-       <button class="btn btn-d btn-sm" onclick="deleteUser('${u.username}')" style="margin-left:3px">🗑</button>`;
-    const myHist=allHistory.filter(r=>r.owner===u.username).length;
-    return `<tr>
-      <td style="color:var(--txt3)">${i+1}</td>
-      <td><span style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:var(--cyan)">${u.username}</span></td>
-      <td>${u.fullname||'-'}</td>
-      <td style="font-size:11.5px;color:var(--txt2)">${u.email||'-'}</td>
-      <td style="font-size:11.5px;color:var(--txt2)">${u.dept||'-'}</td>
-      <td style="font-size:11px">${created}</td>
-      <td style="font-size:11px">${lastLogin}</td>
-      <td style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--orange)">${u.isAdmin?'••••••••':u.password}</td>
-      <td>${statusHtml}</td>
-      <td style="white-space:nowrap;display:flex;gap:3px;flex-wrap:wrap">${actions}</td>
-    </tr>`;
-  }).join('');
-}
-
-async function approveUser(username){
-  const u=users.find(x=>x.username===username);if(!u)return;
-  u.status='approved';u.approvedAt=new Date().toISOString();u.approvedBy='TANNV';
-  await saveUser(u);updatePendingBadge();renderUserMgmt();
-  toast('ok',`Đã phê duyệt ${username}`,'User có thể đăng nhập ngay');
-}
-async function rejectUser(username){
-  if(!confirm(`Từ chối tài khoản ${username}?`))return;
-  const u=users.find(x=>x.username===username);if(!u)return;
-  u.status='rejected';await saveUser(u);updatePendingBadge();renderUserMgmt();
-  toast('inf',`Đã từ chối ${username}`,'');
-}
-async function suspendUser(username){
-  if(!confirm(`Tạm dừng tài khoản ${username}?`))return;
-  const u=users.find(x=>x.username===username);if(!u)return;
-  u.status='pending';await saveUser(u);updatePendingBadge();renderUserMgmt();
-  toast('wa',`Đã tạm dừng ${username}`,'');
-}
-async function deleteUser(username){
-  if(!confirm(`XÓA HOÀN TOÀN tài khoản ${username}?\nLịch sử của user này sẽ bị giữ lại.`))return;
-  users=users.filter(u=>u.username!==username);await deleteUserDoc(username);updatePendingBadge();renderUserMgmt();
-  toast('inf',`Đã xóa ${username}`,'');
-}
-
-// ════════════════════════════════════════════════════
-//  REPORTS & CHARTS
-// ════════════════════════════════════════════════════
-function renderRptStats(){
-  const my=myHistory(),total=my.length,today=new Date().toDateString();
-  const td=my.filter(r=>new Date(r.ts).toDateString()===today).length;
-  const ok=my.filter(r=>r.status==='success').length;
-  const avg=total?Math.round(my.reduce((s,r)=>s+r.changes,0)/total):0;
-  document.getElementById('rpt-stats').innerHTML=`
-    <div class="sc bl"><div class="sc-ico">🔄</div><div class="sc-val">${total}</div><div class="sc-lbl">Tổng chuyển đổi</div><span class="sc-trend tu">+${td} hôm nay</span></div>
-    <div class="sc gr"><div class="sc-ico">✅</div><div class="sc-val">${ok}</div><div class="sc-lbl">Thành công</div><span class="sc-trend tu">${total?Math.round(ok/total*100):0}%</span></div>
-    <div class="sc or"><div class="sc-ico">📅</div><div class="sc-val">${td}</div><div class="sc-lbl">Hôm nay</div><span class="sc-trend tn">today</span></div>
-    <div class="sc pu"><div class="sc-ico">⚡</div><div class="sc-val">${avg}</div><div class="sc-lbl">Avg. rules/lần</div><span class="sc-trend tn">avg</span></div>`;
-}
-function renderCharts(){
-  const my=myHistory(),last7=[];
-  for(let i=6;i>=0;i--){const d=new Date();d.setDate(d.getDate()-i);const ds=d.toDateString();
-    last7.push({l:d.toLocaleDateString('vi-VN',{weekday:'short',day:'numeric'}),c:my.filter(r=>new Date(r.ts).toDateString()===ds).length});}
-  if(dailyChart)dailyChart.destroy();
-  dailyChart=new Chart(document.getElementById('c-daily').getContext('2d'),{type:'bar',data:{labels:last7.map(d=>d.l),datasets:[{label:'Chuyển đổi',data:last7.map(d=>d.c),backgroundColor:'rgba(79,142,247,.45)',borderColor:'#4f8ef7',borderWidth:2,borderRadius:6}]},options:{responsive:true,plugins:{legend:{labels:{color:'#94a3b8'}}},scales:{x:{ticks:{color:'#64748b'},grid:{color:'rgba(80,120,200,.08)'}},y:{ticks:{color:'#64748b',stepSize:1},grid:{color:'rgba(80,120,200,.08)'}}}}});
-  const sc={1:0,2:0,3:0};my.forEach(r=>{if(sc[r.sc]!==undefined)sc[r.sc]++;});
-  if(scChart)scChart.destroy();
-  scChart=new Chart(document.getElementById('c-sc').getContext('2d'),{type:'doughnut',data:{labels:['Procedure','Trigger','Tương đương'],datasets:[{data:[sc[1],sc[2],sc[3]],backgroundColor:['rgba(79,142,247,.65)','rgba(236,72,153,.65)','rgba(16,185,129,.65)'],borderColor:['#4f8ef7','#ec4899','#10b981'],borderWidth:2}]},options:{responsive:true,plugins:{legend:{position:'bottom',labels:{color:'#94a3b8',padding:12}}},cutout:'62%'}});
-}
-
-// ════════════════════════════════════════════════════
-//  REMINDERS
-// ════════════════════════════════════════════════════
-function addRem(){
-  const t=document.getElementById('r-rtitle').value.trim(),ti=document.getElementById('r-rtime').value;
-  if(!t||!ti){toast('inf','Thiếu','Nhập tiêu đề và thời gian');return;}
-  const rec={id:Date.now(),title:t,time:ti,fired:false,owner:session?.username};
-  reminders.push(rec);
-  saveReminder(rec);renderRems();document.getElementById('r-rtitle').value='';toast('ok','Đã thêm nhắc nhở',t);
-}
-function delRem(id){reminders=reminders.filter(r=>r.id!==id);deleteReminderDoc(id);renderRems();}
-function renderRems(){
-  const l=document.getElementById('rem-list');if(!l)return;
-  const myRems=reminders.filter(r=>!r.owner||r.owner===session?.username);
-  if(!myRems.length){l.innerHTML='<div style="color:var(--txt3);font-size:12.5px;text-align:center;padding:16px">Chưa có nhắc nhở nào</div>';return;}
-  l.innerHTML=myRems.map(r=>{const dt=new Date(r.time),past=dt<new Date();return `<div class="rem-item"><div style="font-size:18px">${past?'✅':'🔔'}</div><div style="flex:1"><div style="font-size:13px;font-weight:700;${past?'text-decoration:line-through;color:var(--txt3)':''}">${r.title}</div><div style="font-size:10.5px;color:var(--txt3)">${dt.toLocaleString('vi-VN')} ${past?'(Đã qua)':''}</div></div><button class="btn btn-d btn-sm btn-ico" onclick="delRem(${r.id})">✕</button></div>`;}).join('');
-}
-function checkRems(){const now=new Date();reminders.forEach(r=>{if(!r.fired&&new Date(r.time)<=now&&(!r.owner||r.owner===session?.username)){r.fired=true;toast('wa','🔔 Nhắc nhở!',r.title);saveReminder(r);}});}
-
-// ════════════════════════════════════════════════════
-//  ADMIN DASHBOARD
-// ════════════════════════════════════════════════════
-function renderAdmStats(){
-  const total=allHistory.length,today=new Date().toDateString();
-  const td=allHistory.filter(r=>new Date(r.ts).toDateString()===today).length;
-  const avgMs=total?(allHistory.reduce((s,r)=>s+parseFloat(r.ms||0),0)/total).toFixed(1):0;
-  const tRules=allHistory.reduce((s,r)=>s+r.changes,0);
-  document.getElementById('adm-stats').innerHTML=`
-    <div class="sc bl"><div class="sc-ico">📊</div><div class="sc-val">${total}</div><div class="sc-lbl">Tổng chuyển đổi (toàn hệ thống)</div></div>
-    <div class="sc gr"><div class="sc-ico">📅</div><div class="sc-val">${td}</div><div class="sc-lbl">Hôm nay</div></div>
-    <div class="sc or"><div class="sc-ico">⚡</div><div class="sc-val">${avgMs}<span style="font-size:12px;font-weight:400">ms</span></div><div class="sc-lbl">Avg. thời gian xử lý</div></div>
-    <div class="sc pu"><div class="sc-ico">🔧</div><div class="sc-val">${tRules}</div><div class="sc-lbl">Tổng rules áp dụng</div></div>
-    <div class="sc cy"><div class="sc-ico">👥</div><div class="sc-val">${users.length+1}</div><div class="sc-lbl">Tổng tài khoản</div></div>
-    <div class="sc rd"><div class="sc-ico">⏳</div><div class="sc-val">${users.filter(u=>u.status==='pending').length}</div><div class="sc-lbl">Chờ phê duyệt</div></div>`;
-  document.getElementById('adm-sess').textContent=`Session: ${sessId.slice(0,14)}... | Start: ${new Date(sessStart).toLocaleTimeString('vi-VN')}`;
-}
-function renderAdmCharts(){
-  const hours=Array.from({length:24},(_,i)=>i),today=new Date().toDateString();
-  const hc=hours.map(h=>allHistory.filter(r=>{const d=new Date(r.ts);return d.toDateString()===today&&d.getHours()===h;}).length);
-  if(hourChart)hourChart.destroy();
-  hourChart=new Chart(document.getElementById('c-hour').getContext('2d'),{type:'line',data:{labels:hours.map(h=>h+':00'),datasets:[{label:'Chuyển đổi',data:hc,borderColor:'#06b6d4',backgroundColor:'rgba(6,182,212,.09)',fill:true,tension:.4,pointRadius:3,pointBackgroundColor:'#06b6d4'}]},options:{responsive:true,plugins:{legend:{labels:{color:'#94a3b8'}}},scales:{x:{ticks:{color:'#64748b',maxTicksLimit:8},grid:{color:'rgba(80,120,200,.08)'}},y:{ticks:{color:'#64748b',stepSize:1},grid:{color:'rgba(80,120,200,.08)'}}}}});
-  const last10=allHistory.slice(0,10).reverse();
-  if(perfChart)perfChart.destroy();
-  perfChart=new Chart(document.getElementById('c-perf').getContext('2d'),{type:'bar',data:{labels:last10.map((_,i)=>'#'+(i+1)),datasets:[{label:'ms',data:last10.map(r=>parseFloat(r.ms)||0),backgroundColor:'rgba(139,92,246,.55)',borderColor:'#8b5cf6',borderWidth:2,borderRadius:4}]},options:{responsive:true,plugins:{legend:{labels:{color:'#94a3b8'}}},scales:{x:{ticks:{color:'#64748b'},grid:{color:'rgba(80,120,200,.08)'}},y:{ticks:{color:'#64748b'},grid:{color:'rgba(80,120,200,.08)'}}}}});
-}
-function renderAdmActs(){
-  const list=document.getElementById('adm-acts'),recent=allHistory.slice(0,25);
-  if(!recent.length){list.innerHTML='<div class="empty"><div class="empty-ico">📭</div><div class="empty-t">Chưa có hoạt động</div></div>';return;}
-  list.innerHTML=recent.map(r=>{
     const dt=new Date(r.ts),ago=timeAgo(dt);
     return `<div class="act-item">
       <div class="act-av ${SC_AVAT[r.sc]||'av-bl'}">${SC_ICO[r.sc]||'⚡'}</div>
@@ -1696,6 +1050,57 @@ function uploadAvatar(event) {
 function resetGeminiKey() {
   localStorage.removeItem('bravo_gemini_key');
   toast('inf', 'Thông báo', 'Đã xóa API Key cũ. Vui lòng gửi một tin nhắn mới để nhập lại Key.');
+}
+
+let attachedFilesText = [];
+
+function handleFileSelect(e) {
+  const files = e.target.files;
+  const preview = document.getElementById('file-preview');
+  
+  for (let i = 0; i < files.length; i++) {
+    const file = files[i];
+    
+    // Đọc file theo định dạng
+    if (file.name.endsWith('.docx')) {
+      const tagId = 'ft_' + Date.now() + '_' + i;
+      preview.style.display = 'flex';
+      preview.insertAdjacentHTML('beforeend', `<div class="file-tag" id="${tagId}">📄 ${file.name} (Đang đọc...)</div>`);
+      
+      const reader = new FileReader();
+      reader.onload = function(evt) {
+        mammoth.extractRawText({arrayBuffer: evt.target.result})
+          .then(function(result) {
+            document.getElementById(tagId).innerHTML = `📄 ${file.name} <span class="file-tag-close" onclick="removeAttachedFile('${tagId}')">×</span>`;
+            attachedFilesText.push({ id: tagId, name: file.name, text: result.value });
+          }).catch(err => {
+            document.getElementById(tagId).innerHTML = `❌ Lỗi đọc ${file.name} <span class="file-tag-close" onclick="removeAttachedFile('${tagId}')">×</span>`;
+          });
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      const tagId = 'ft_' + Date.now() + '_' + i;
+      preview.style.display = 'flex';
+      preview.insertAdjacentHTML('beforeend', `<div class="file-tag" id="${tagId}">📄 ${file.name} <span class="file-tag-close" onclick="removeAttachedFile('${tagId}')">×</span></div>`);
+      
+      const reader = new FileReader();
+      reader.onload = function(evt) {
+        attachedFilesText.push({ id: tagId, name: file.name, text: evt.target.result });
+      };
+      reader.readAsText(file);
+    }
+  }
+  // Reset input để có thể chọn lại file cũ
+  e.target.value = '';
+}
+
+function removeAttachedFile(tagId) {
+  const el = document.getElementById(tagId);
+  if(el) el.remove();
+  attachedFilesText = attachedFilesText.filter(f => f.id !== tagId);
+  if(attachedFilesText.length === 0) {
+    document.getElementById('file-preview').style.display = 'none';
+  }
 }
 
 function handleChatKey(e) {
@@ -2064,7 +1469,7 @@ $$;
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      contents: [{ parts: [{ text: "SYSTEM INSTRUCTION:\n" + systemPrompt + "\n\n---\nNGƯỜI DÙNG HỎI:\n" + text }] }]
+      contents: [{ parts: [{ text: "SYSTEM INSTRUCTION:\n" + systemPrompt + "\n\n---\nNGƯỜI DÙNG HỎI:\n" + text + fileContext }] }]
     })
   })
   .then(res => res.json())
