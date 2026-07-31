@@ -9,6 +9,11 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/dracula.min.css" />
+  
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/10.4.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.4.0/firebase-firestore-compat.js"></script>
+  
   <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/sql/sql.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.js"></script>
@@ -295,19 +300,33 @@ tr:hover td{background:rgba(255,255,255,.018);}
 
 @media(max-width:1100px){.editors,.charts-g,.mo-grid,.admin-charts{grid-template-columns:1fr}}
 @media(max-width:768px){.sb{transform:translateX(-255px)}.main{margin-left:0}.stats-g{grid-template-columns:1fr 1fr}.rem-form{grid-template-columns:1fr}}
+
+/* Loader for initial fetch */
+#fs-loader {
+  position:fixed; inset:0; z-index:9999; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  background:var(--bg); color:var(--txt); transition:opacity 0.3s ease;
+}
+.spinner { width:40px; height:40px; border:3px solid rgba(79,142,247,0.2); border-top-color:var(--blue); border-radius:50%; animation:spin 1s linear infinite; margin-bottom:16px; }
+@keyframes spin { to { transform:rotate(360deg); } }
 </style>
 </head>
 <body>
 
+<!-- INITIAL LOADER -->
+<div id="fs-loader">
+  <div class="spinner"></div>
+  <div style="font-weight:700;font-size:14px;color:var(--blue)">Đang kết nối Cloud Database...</div>
+</div>
+
 <!-- ════════════════════════════════════════
      AUTH SCREEN
 ════════════════════════════════════════ -->
-<div id="auth-screen">
+<div id="auth-screen" style="display:none;">
   <div class="auth-card" id="auth-card">
     <div class="auth-top">
       <div class="auth-logo">🐘</div>
       <div class="auth-brand">BRAVO Converter</div>
-      <div class="auth-sub">T-SQL → PostgreSQL • Phiên bản chuyên nghiệp</div>
+      <div class="auth-sub">T-SQL → PostgreSQL • Cloud Database</div>
     </div>
 
     <div class="auth-tabs" style="margin-bottom:0;margin-top:0;padding:16px 24px 0;">
@@ -629,7 +648,6 @@ tr:hover td{background:rgba(255,255,255,.018);}
         <div id="adm-acts"></div>
       </div>
     </div>
-  
 
   </div><!-- /main -->
 </div><!-- /wrap -->
@@ -651,18 +669,29 @@ tr:hover td{background:rgba(255,255,255,.018);}
 
 <script>
 // ════════════════════════════════════════════════════
+//  FIREBASE CONFIGURATION
+// ════════════════════════════════════════════════════
+const firebaseConfig = {
+  apiKey: "AIzaSyCOwujUDWHA-W9LZ0ZLNB7mf9c6q0HXk5c",
+  authDomain: "pget-64850.firebaseapp.com",
+  projectId: "pget-64850",
+  storageBucket: "pget-64850.firebasestorage.app",
+  messagingSenderId: "539489743222",
+  appId: "1:539489743222:web:cef63d3077eb3c9ddc8a57",
+  measurementId: "G-RMS5ZL5CJ5"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+// ════════════════════════════════════════════════════
 //  CONSTANTS & STATE
 // ════════════════════════════════════════════════════
 const ADMIN_CRED = { username:'TANNV', password:'Tien@14051', fullname:'Trần Anh Nhân', dept:'IT Admin', role:'admin' };
 
-// Users stored as plain object array (no encryption per request)
-let users = JSON.parse(localStorage.getItem('bravo_users') || '[]');
-// Current session
+let users = [];
+let allHistory = [];
+let reminders = [];
 let session = JSON.parse(localStorage.getItem('bravo_session') || 'null');
-// All history (each record has .owner = username)
-let allHistory = JSON.parse(localStorage.getItem('bravo_hist_all') || '[]');
-let reminders = JSON.parse(localStorage.getItem('bravo_rems') || '[]');
-
 let curSc = 1, curPg = 'converter', histPg = 1;
 const PER_PAGE = 10;
 let edIn, edOut, moRecord = null;
@@ -670,26 +699,23 @@ let dailyChart, scChart, hourChart, perfChart;
 const sessId = localStorage.getItem('bravo_sess') || ('sess_' + Date.now());
 localStorage.setItem('bravo_sess', sessId);
 const sessStart = new Date().toISOString();
+let firebaseLoaded = false;
 
 // ════════════════════════════════════════════════════
 //  AUTH HELPERS
 // ════════════════════════════════════════════════════
-function saveUsers() { localStorage.setItem('bravo_users', JSON.stringify(users)); }
 function saveSession(u) { session = u; localStorage.setItem('bravo_session', JSON.stringify(u)); }
 function clearSession() { session = null; localStorage.removeItem('bravo_session'); }
 
 function findUser(username) {
-  if (username.toUpperCase() === ADMIN_CRED.username) return { ...ADMIN_CRED, status:'approved' };
+  if (username.toUpperCase() === ADMIN_CRED.username) return { ...ADMIN_CRED, status:'approved', isAdmin:true };
   return users.find(u => u.username.toLowerCase() === username.toLowerCase()) || null;
 }
 
 function showAuthMsg(id, type, msg) {
   const el = document.getElementById(id);
-  el.className = 'auth-msg ' + type;
-  el.textContent = msg;
-  el.style.display = 'block';
+  el.className = 'auth-msg ' + type; el.textContent = msg; el.style.display = 'block';
 }
-
 function hideAuthMsg(id) { document.getElementById(id).style.display = 'none'; }
 
 function togglePass(id, btn) {
@@ -712,10 +738,48 @@ function logoutAuth() {
 }
 
 // ════════════════════════════════════════════════════
-//  STARTUP — check session
+//  STARTUP — FIREBASE LISTENERS
 // ════════════════════════════════════════════════════
 window.addEventListener('DOMContentLoaded', () => {
-  // Auto-fill remembered password
+  // Setup realtime listeners
+  db.collection('users').onSnapshot(snap => {
+    users = snap.docs.map(d => d.data());
+    
+    // Initial load check
+    if (!firebaseLoaded) {
+      firebaseLoaded = true;
+      document.getElementById('fs-loader').style.display = 'none';
+      checkSessionOnLoad();
+    }
+    
+    // If admin page active
+    if (curPg === 'usermgmt') renderUserMgmt();
+    updatePendingBadge();
+  }, err => {
+    console.error("Firebase Rule Error: ", err);
+    document.getElementById('fs-loader').innerHTML = `<div style="color:red;padding:20px;text-align:center"><h2>Lỗi kết nối CSDL!</h2><p>Vui lòng đảm bảo Firestore đã được tạo và cấp quyền Rule (Test Mode) theo hướng dẫn.</p></div>`;
+  });
+
+  db.collection('history').orderBy('ts', 'desc').limit(1000).onSnapshot(snap => {
+    allHistory = snap.docs.map(d => d.data());
+    if (curPg === 'history') renderHist();
+    if (curPg === 'reports') { renderRptStats(); renderCharts(); }
+    if (curPg === 'admin') { renderAdmStats(); renderAdmCharts(); renderAdmActs(); }
+    updateSidebar();
+  });
+
+  db.collection('reminders').onSnapshot(snap => {
+    reminders = snap.docs.map(d => d.data());
+    renderRems();
+  });
+
+  // Default reminder time
+  const dt = new Date(); dt.setHours(dt.getHours() + 1); dt.setMinutes(0);
+  const rtime = document.getElementById('r-rtime');
+  if (rtime) rtime.value = dt.toISOString().slice(0,16);
+});
+
+function checkSessionOnLoad() {
   const rem = localStorage.getItem('bravo_remember');
   if (rem) {
     try {
@@ -727,25 +791,23 @@ window.addEventListener('DOMContentLoaded', () => {
   }
 
   if (session) {
-    // Verify session still valid
     const u = findUser(session.username);
     if (u && u.status === 'approved') {
       launchApp(session);
     } else if (u && u.status === 'pending') {
       document.getElementById('pending-uname').textContent = session.username;
+      document.getElementById('auth-screen').style.display = 'flex';
       document.getElementById('form-login').style.display = 'none';
       document.getElementById('form-register').style.display = 'none';
       document.getElementById('form-pending').style.display = 'block';
     } else {
       clearSession();
+      document.getElementById('auth-screen').style.display = 'flex';
     }
+  } else {
+    document.getElementById('auth-screen').style.display = 'flex';
   }
-
-  // Set default reminder time
-  const dt = new Date(); dt.setHours(dt.getHours() + 1); dt.setMinutes(0);
-  const rtime = document.getElementById('r-rtime');
-  if (rtime) rtime.value = dt.toISOString().slice(0,16);
-});
+}
 
 // ════════════════════════════════════════════════════
 //  LOGIN
@@ -798,8 +860,9 @@ function doLogin() {
     }
 
     // Approved user
-    user.lastLogin = new Date().toISOString();
-    saveUsers();
+    const now = new Date().toISOString();
+    db.collection('users').doc(user.username).update({ lastLogin: now });
+    
     if (remember) localStorage.setItem('bravo_remember', JSON.stringify({u:username,p:password}));
     else localStorage.removeItem('bravo_remember');
     const u = { username: user.username, fullname: user.fullname, role: 'user', dept: user.dept };
@@ -829,29 +892,29 @@ function doRegister() {
   const btn = document.getElementById('btn-reg');
   btn.disabled = true; btn.textContent = '⏳ Đang tạo tài khoản...';
 
-  setTimeout(() => {
-    const newUser = {
-      username, fullname, email, dept, password,
-      status: 'pending',
-      createdAt: new Date().toISOString(),
-      lastLogin: null,
-      approvedAt: null,
-      approvedBy: null
-    };
-    users.push(newUser);
-    saveUsers();
-    updatePendingBadge();
+  const newUser = {
+    username, fullname, email, dept, password,
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+    lastLogin: null,
+    approvedAt: null,
+    approvedBy: null
+  };
 
+  db.collection('users').doc(username).set(newUser).then(() => {
     showAuthMsg('reg-msg','ok','✅ Tài khoản đã được tạo! Vui lòng chờ Admin (TANNV) phê duyệt.');
     btn.disabled = false; btn.textContent = '✨ Tạo tài khoản';
-
+    
     setTimeout(() => {
       saveSession({ username, fullname, role:'user', dept });
       document.getElementById('form-register').style.display = 'none';
       document.getElementById('form-pending').style.display = 'block';
       document.getElementById('pending-uname').textContent = username;
     }, 1800);
-  }, 600);
+  }).catch(err => {
+    showAuthMsg('reg-msg','er','Lỗi máy chủ Firebase: ' + err.message);
+    btn.disabled = false; btn.textContent = '✨ Tạo tài khoản';
+  });
 }
 
 function checkApproval() {
@@ -872,14 +935,12 @@ function launchApp(u) {
   document.getElementById('auth-screen').style.display = 'none';
   document.getElementById('main-app').style.display = 'flex';
 
-  // Set sidebar user info
   const isAdmin = u.role === 'admin';
   document.getElementById('sb-av').className = 'sb-user-av ' + (isAdmin ? 'av-admin' : 'av-user');
   document.getElementById('sb-av').textContent = u.username.slice(0,2).toUpperCase();
   document.getElementById('sb-uname').textContent = u.fullname || u.username;
   document.getElementById('sb-urole').textContent = isAdmin ? '🛡️ Administrator' : '👤 ' + (u.dept || 'User');
 
-  // Show admin nav
   if (isAdmin) {
     document.getElementById('admin-nav-group').style.display = 'block';
     document.getElementById('h-user-filter').style.display = '';
@@ -890,15 +951,17 @@ function launchApp(u) {
   }
 
   // Init CodeMirror
-  edIn = CodeMirror.fromTextArea(document.getElementById('inp'), {
-    mode:'text/x-sql', theme:'dracula', lineNumbers:true,
-    matchBrackets:true, styleActiveLine:true, lineWrapping:true,
-    extraKeys:{'Ctrl-Enter':runConvert,'Cmd-Enter':runConvert}
-  });
-  edOut = CodeMirror.fromTextArea(document.getElementById('out'), {
-    mode:'text/x-sql', theme:'dracula', lineNumbers:true, readOnly:true, lineWrapping:true
-  });
-  edIn.on('change', updateInpStat);
+  if(!edIn) {
+    edIn = CodeMirror.fromTextArea(document.getElementById('inp'), {
+      mode:'text/x-sql', theme:'dracula', lineNumbers:true,
+      matchBrackets:true, styleActiveLine:true, lineWrapping:true,
+      extraKeys:{'Ctrl-Enter':runConvert,'Cmd-Enter':runConvert}
+    });
+    edOut = CodeMirror.fromTextArea(document.getElementById('out'), {
+      mode:'text/x-sql', theme:'dracula', lineNumbers:true, readOnly:true, lineWrapping:true
+    });
+    edIn.on('change', updateInpStat);
+  }
 
   setScenario(1, document.querySelector('.sc-tab[data-sc="1"]'));
   updateSidebar();
@@ -906,7 +969,6 @@ function launchApp(u) {
   checkRems();
   setInterval(checkRems, 60000);
 
-  // Nav
   document.querySelectorAll('.ni[data-page]').forEach(el => {
     el.addEventListener('click', () => nav(el.dataset.page));
   });
@@ -993,10 +1055,11 @@ function runConvert() {
       document.getElementById('out-stat').textContent = result.length + ' ký tự';
       document.getElementById('conv-time').textContent = `⏱ ${ms}ms`;
       renderLog(log);
+      
       const rec = { id:Date.now(), ts:new Date().toISOString(), sc:curSc, input:sql, output:result, changes:log.length, status:'success', ms, owner: session.username };
-      allHistory.unshift(rec);
-      saveAllHist();
-      updateSidebar();
+      // Push to Firestore
+      db.collection('history').doc(String(rec.id)).set(rec);
+      
       toast('ok','Thành công!',`${log.length} quy tắc — ${ms}ms`);
     } catch(e) { toast('er','Lỗi',e.message); }
     hideProg();
@@ -1191,7 +1254,7 @@ function clearEditors(){if(edIn)edIn.setValue('');if(edOut)edOut.setValue('');do
 function copyOut(){const v=edOut.getValue();if(!v.trim()){toast('inf','Trống','');return;}navigator.clipboard.writeText(v).then(()=>toast('ok','Đã copy!','PostgreSQL SQL đã được sao chép'));}
 function dlOut(){const v=edOut.getValue();if(!v.trim()){toast('inf','Trống','');return;}const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([v],{type:'text/plain'}));a.download='bravo_pg_'+Date.now()+'.sql';a.click();toast('ok','Đã tải!','');}
 function formatInput(){let s=edIn.getValue();['SELECT','FROM','WHERE','AND','OR','ORDER BY','GROUP BY','HAVING','INNER JOIN','LEFT OUTER JOIN','LEFT JOIN','RIGHT JOIN','ON','INSERT INTO','VALUES','UPDATE','SET','DELETE','CREATE TABLE','ALTER TABLE'].forEach(k=>{s=s.replace(new RegExp('\\b'+k+'\\b','gi'),'\n'+k);});s=s.replace(/\n{2,}/g,'\n').trim();edIn.setValue(s);toast('ok','Đã format','');}
-function saveNow(){const i=edIn.getValue().trim(),o=edOut.getValue().trim();if(!i||!o){toast('inf','Chưa đủ','Hãy convert trước');return;}const rec={id:Date.now(),ts:new Date().toISOString(),sc:curSc,input:i,output:o,changes:0,status:'success',ms:0,owner:session.username};allHistory.unshift(rec);saveAllHist();updateSidebar();toast('ok','Đã lưu!','');}
+function saveNow(){const i=edIn.getValue().trim(),o=edOut.getValue().trim();if(!i||!o){toast('inf','Chưa đủ','Hãy convert trước');return;}const rec={id:Date.now(),ts:new Date().toISOString(),sc:curSc,input:i,output:o,changes:0,status:'success',ms:0,owner:session.username}; db.collection('history').doc(String(rec.id)).set(rec); toast('ok','Đã lưu!','');}
 function loadSample(){
   const s={
     1:`CREATE PROCEDURE dbo.usp_B30AccDoc_GetData\n\t@_DocDate1\t\tDATETIME = NULL,\n\t@_DocDate2\t\tDATETIME = NULL,\n\t@_BranchCode\tNVARCHAR(24) = NULL,\n\t@pout_LayoutXML\tNVARCHAR(MAX) OUTPUT,\n\t@pout_ColCount\tSMALLINT OUTPUT\nAS\nBEGIN\n\tSET NOCOUNT ON;\n\tSELECT @pout_LayoutXML = N'<DefaultReport></DefaultReport>', @pout_ColCount = 5\n\tSELECT TOP 100\n\t\t[d].[Id], [d].[DocNo], [d].[DocDate],\n\t\tISNULL([d].[BranchCode], N'') AS BranchCode,\n\t\tCONVERT(VARCHAR(10), [d].[DocDate], 120) AS DocDateStr\n\tFROM [dbo].[B30AccDoc] [d] WITH(NOLOCK)\n\tWHERE [d].[IsActive] = 1\n\t\tAND ([d].[DocDate] >= @_DocDate1 OR @_DocDate1 IS NULL)\n\tORDER BY [d].[DocDate] DESC;\nEND\nGO`,
@@ -1205,7 +1268,6 @@ function loadSample(){
 // ════════════════════════════════════════════════════
 //  HISTORY
 // ════════════════════════════════════════════════════
-function saveAllHist(){if(allHistory.length>1000)allHistory=allHistory.slice(0,1000);localStorage.setItem('bravo_hist_all',JSON.stringify(allHistory));}
 function myHistory(){return session?.role==='admin'?allHistory:allHistory.filter(r=>r.owner===session?.username);}
 function updateSidebar(){
   const my=myHistory();
@@ -1285,11 +1347,11 @@ function renderHist(){
 function goPg(p){histPg=p;renderHist();}
 function clearMyHist(){
   if(!confirm('Xóa toàn bộ lịch sử của bạn?'))return;
-  allHistory=allHistory.filter(r=>r.owner!==session?.username);
-  saveAllHist();updateSidebar();renderHist();
+  const myR=allHistory.filter(r=>r.owner===session?.username);
+  myR.forEach(r => db.collection('history').doc(String(r.id)).delete());
   toast('inf','Đã xóa lịch sử của bạn','');
 }
-function delRec(id){allHistory=allHistory.filter(r=>r.id!==id);saveAllHist();updateSidebar();renderHist();toast('inf','Đã xóa','');}
+function delRec(id){ db.collection('history').doc(String(id)).delete(); toast('inf','Đã xóa','');}
 
 function viewRec(id){
   const r=allHistory.find(x=>x.id===id);if(!r)return;
@@ -1371,7 +1433,6 @@ function renderUserTable(){
        ${u.status==='approved'?`<button class="btn btn-o btn-sm" onclick="suspendUser('${u.username}')">⏸ Tạm dừng</button>`:''}
        ${u.status==='rejected'?`<button class="btn btn-g btn-sm" onclick="approveUser('${u.username}')">↩ Mở lại</button>`:''}
        <button class="btn btn-d btn-sm" onclick="deleteUser('${u.username}')" style="margin-left:3px">🗑</button>`;
-    const myHist=allHistory.filter(r=>r.owner===u.username).length;
     return `<tr>
       <td style="color:var(--txt3)">${i+1}</td>
       <td><span style="font-family:'JetBrains Mono',monospace;font-size:12px;font-weight:700;color:var(--cyan)">${u.username}</span></td>
@@ -1388,26 +1449,23 @@ function renderUserTable(){
 }
 
 function approveUser(username){
-  const u=users.find(x=>x.username===username);if(!u)return;
-  u.status='approved';u.approvedAt=new Date().toISOString();u.approvedBy='TANNV';
-  saveUsers();updatePendingBadge();renderUserMgmt();
-  toast('ok',`Đã phê duyệt ${username}`,'User có thể đăng nhập ngay');
+  db.collection('users').doc(username).update({
+    status:'approved', approvedAt:new Date().toISOString(), approvedBy:'TANNV'
+  }).then(() => toast('ok',`Đã duyệt ${username}`,'User có thể đăng nhập ngay'));
 }
 function rejectUser(username){
   if(!confirm(`Từ chối tài khoản ${username}?`))return;
-  const u=users.find(x=>x.username===username);if(!u)return;
-  u.status='rejected';saveUsers();updatePendingBadge();renderUserMgmt();
+  db.collection('users').doc(username).update({ status:'rejected' });
   toast('inf',`Đã từ chối ${username}`,'');
 }
 function suspendUser(username){
   if(!confirm(`Tạm dừng tài khoản ${username}?`))return;
-  const u=users.find(x=>x.username===username);if(!u)return;
-  u.status='pending';saveUsers();updatePendingBadge();renderUserMgmt();
+  db.collection('users').doc(username).update({ status:'pending' });
   toast('wa',`Đã tạm dừng ${username}`,'');
 }
 function deleteUser(username){
   if(!confirm(`XÓA HOÀN TOÀN tài khoản ${username}?\nLịch sử của user này sẽ bị giữ lại.`))return;
-  users=users.filter(u=>u.username!==username);saveUsers();updatePendingBadge();renderUserMgmt();
+  db.collection('users').doc(username).delete();
   toast('inf',`Đã xóa ${username}`,'');
 }
 
@@ -1442,18 +1500,18 @@ function renderCharts(){
 function addRem(){
   const t=document.getElementById('r-rtitle').value.trim(),ti=document.getElementById('r-rtime').value;
   if(!t||!ti){toast('inf','Thiếu','Nhập tiêu đề và thời gian');return;}
-  reminders.push({id:Date.now(),title:t,time:ti,fired:false,owner:session?.username});
-  saveRems();renderRems();document.getElementById('r-rtitle').value='';toast('ok','Đã thêm nhắc nhở',t);
+  const rec = {id:Date.now(),title:t,time:ti,fired:false,owner:session?.username};
+  db.collection('reminders').doc(String(rec.id)).set(rec);
+  document.getElementById('r-rtitle').value='';toast('ok','Đã thêm nhắc nhở',t);
 }
-function saveRems(){localStorage.setItem('bravo_rems',JSON.stringify(reminders));}
-function delRem(id){reminders=reminders.filter(r=>r.id!==id);saveRems();renderRems();}
+function delRem(id){ db.collection('reminders').doc(String(id)).delete(); }
 function renderRems(){
   const l=document.getElementById('rem-list');if(!l)return;
   const myRems=reminders.filter(r=>!r.owner||r.owner===session?.username);
   if(!myRems.length){l.innerHTML='<div style="color:var(--txt3);font-size:12.5px;text-align:center;padding:16px">Chưa có nhắc nhở nào</div>';return;}
   l.innerHTML=myRems.map(r=>{const dt=new Date(r.time),past=dt<new Date();return `<div class="rem-item"><div style="font-size:18px">${past?'✅':'🔔'}</div><div style="flex:1"><div style="font-size:13px;font-weight:700;${past?'text-decoration:line-through;color:var(--txt3)':''}">${r.title}</div><div style="font-size:10.5px;color:var(--txt3)">${dt.toLocaleString('vi-VN')} ${past?'(Đã qua)':''}</div></div><button class="btn btn-d btn-sm btn-ico" onclick="delRem(${r.id})">✕</button></div>`;}).join('');
 }
-function checkRems(){const now=new Date();reminders.forEach(r=>{if(!r.fired&&new Date(r.time)<=now&&(!r.owner||r.owner===session?.username)){r.fired=true;toast('wa','🔔 Nhắc nhở!',r.title);saveRems();}});}
+function checkRems(){const now=new Date();reminders.forEach(r=>{if(!r.fired&&new Date(r.time)<=now&&(!r.owner||r.owner===session?.username)){db.collection('reminders').doc(String(r.id)).update({fired:true});toast('wa','🔔 Nhắc nhở!',r.title);}});}
 
 // ════════════════════════════════════════════════════
 //  ADMIN DASHBOARD
@@ -1477,7 +1535,7 @@ function renderAdmCharts(){
   const hc=hours.map(h=>allHistory.filter(r=>{const d=new Date(r.ts);return d.toDateString()===today&&d.getHours()===h;}).length);
   if(hourChart)hourChart.destroy();
   hourChart=new Chart(document.getElementById('c-hour').getContext('2d'),{type:'line',data:{labels:hours.map(h=>h+':00'),datasets:[{label:'Chuyển đổi',data:hc,borderColor:'#06b6d4',backgroundColor:'rgba(6,182,212,.09)',fill:true,tension:.4,pointRadius:3,pointBackgroundColor:'#06b6d4'}]},options:{responsive:true,plugins:{legend:{labels:{color:'#94a3b8'}}},scales:{x:{ticks:{color:'#64748b',maxTicksLimit:8},grid:{color:'rgba(80,120,200,.08)'}},y:{ticks:{color:'#64748b',stepSize:1},grid:{color:'rgba(80,120,200,.08)'}}}}});
-  const last10=allHistory.slice(0,10).reverse();
+  const last10=allHistory.slice(0,10);
   if(perfChart)perfChart.destroy();
   perfChart=new Chart(document.getElementById('c-perf').getContext('2d'),{type:'bar',data:{labels:last10.map((_,i)=>'#'+(i+1)),datasets:[{label:'ms',data:last10.map(r=>parseFloat(r.ms)||0),backgroundColor:'rgba(139,92,246,.55)',borderColor:'#8b5cf6',borderWidth:2,borderRadius:4}]},options:{responsive:true,plugins:{legend:{labels:{color:'#94a3b8'}}},scales:{x:{ticks:{color:'#64748b'},grid:{color:'rgba(80,120,200,.08)'}},y:{ticks:{color:'#64748b'},grid:{color:'rgba(80,120,200,.08)'}}}}});
 }
@@ -1512,8 +1570,8 @@ function exportCSV(){
 }
 function resetAll(){
   if(session?.role!=='admin'){toast('er','Không có quyền','Chỉ Admin mới reset được');return;}
-  if(!confirm('⚠️ RESET TOÀN BỘ DỮ LIỆU HỆ THỐNG?\nXóa tất cả lịch sử. Tài khoản user được giữ lại.\nKHÔNG THỂ HOÀN TÁC!'))return;
-  allHistory=[];saveAllHist();updateSidebar();
+  if(!confirm('⚠️ RESET TOÀN BỘ DỮ LIỆU HỆ THỐNG?\nXóa tất cả lịch sử (Giữ lại user).\nKHÔNG THỂ HOÀN TÁC!'))return;
+  allHistory.forEach(r => db.collection('history').doc(String(r.id)).delete());
   toast('inf','Đã reset lịch sử','');
 }
 
