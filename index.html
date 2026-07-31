@@ -279,7 +279,7 @@ tr:hover td{background:rgba(255,255,255,.018);}
 .msg-av{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;background:var(--grad);}
 .msg.user .msg-av{background:var(--blue);}
 .msg.ai .msg-av{background:var(--purple);}
-.msg-bub{padding:10px 14px;border-radius:12px;font-size:13px;line-height:1.5;position:relative;}
+.msg-bub{padding:10px 14px;border-radius:12px;font-size:13px;line-height:1.5;position:relative;white-space:pre-wrap;word-break:break-word;}
 .msg.user .msg-bub{background:var(--blue);color:#fff;border-top-right-radius:2px;}
 .msg.ai .msg-bub{background:var(--bg2);border:1px solid var(--bdr);color:var(--txt);border-top-left-radius:2px;}
 .chat-input-area{padding:12px;border-top:1px solid var(--bdr);background:var(--bg2);display:flex;gap:8px;align-items:flex-end;}
@@ -1762,7 +1762,7 @@ function sendChatMessage() {
 
   const systemPrompt = "Bạn là chuyên gia cấp cao về hệ thống PGE và chuẩn lập trình BRAVO trên PostgreSQL. Nhiệm vụ của bạn là giải đáp thắc mắc, hướng dẫn chuyển đổi từ T-SQL sang PostgreSQL chuẩn xác tuyệt đối. Hãy trả lời ngắn gọn, đúng trọng tâm và dùng định dạng HTML cơ bản (<b>, <i>, <code>, <br>) để dễ đọc. Nếu không chắc chắn, hãy yêu cầu người dùng cung cấp thêm ngữ cảnh.";
 
-  fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
+  fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${GEMINI_API_KEY}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -1777,10 +1777,18 @@ function sendChatMessage() {
     let reply = "Xin lỗi, tôi không thể xử lý câu hỏi này.";
     
     if (data.error) {
-      reply = `❌ <strong>Lỗi từ Google API:</strong> ${data.error.message}<br/><br/><i>Gợi ý: Vui lòng kiểm tra lại xem bạn đã copy chính xác toàn bộ API Key chưa. Để đổi Key, hãy nhấn vào <strong>nút hình chiếc chìa khóa (🔑)</strong> cạnh ô nhập chữ rồi gửi lại tin nhắn nhé!</i>`;
+      reply = `❌ <strong>Lỗi từ Google API:</strong> ${data.error.message}\n\n<i>Gợi ý: Vui lòng kiểm tra lại xem bạn đã copy chính xác toàn bộ API Key chưa. Để đổi Key, hãy nhấn vào <strong>nút hình chiếc chìa khóa (🔑)</strong> cạnh ô nhập chữ rồi gửi lại tin nhắn nhé!</i>`;
     } else if (data.candidates && data.candidates.length > 0) {
       reply = data.candidates[0].content.parts[0].text;
-      reply = reply.replace(/\n/g, '<br/>').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>').replace(/```(.*?)```/gs, '<div class="mo-code" style="margin-top:6px">$1</div>').replace(/`(.*?)`/g, '<code>$1</code>');
+      
+      // Escape HTML để tránh lỗi vỡ layout khi AI trả về code SQL chứa dấu < >
+      reply = reply.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      
+      // Parse Markdown
+      reply = reply.replace(/```(\w+)?\n([\s\S]*?)```/g, '<div class="mo-code" style="margin-top:6px">$2</div>');
+      reply = reply.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+      reply = reply.replace(/\*(.*?)\*/g, '<em>$1</em>');
+      reply = reply.replace(/`([^`]+)`/g, '<code>$1</code>');
     }
     
     const aiHtml = `
