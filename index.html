@@ -1747,8 +1747,16 @@ function sendChatMessage() {
     }
     localStorage.setItem('bravo_gemini_key', GEMINI_API_KEY);
   }
-  const systemPrompt = "Bạn là chuyên gia cấp cao về hệ thống PGE và chuẩn lập trình BRAVO trên PostgreSQL. Nhiệm vụ của bạn là giải đáp thắc mắc, hướng dẫn chuyển đổi từ T-SQL sang PostgreSQL chuẩn xác tuyệt đối. Hãy trả lời ngắn gọn, đúng trọng tâm và dùng định dạng HTML cơ bản (<b>, <i>, <code>, <br>) để dễ đọc. Nếu không chắc chắn, hãy yêu cầu người dùng cung cấp thêm ngữ cảnh.";
+  // Lấy systemPrompt toàn cục (đã chứa các quy tắc Convert chuyên sâu)
+  let finalSystemPrompt = typeof systemPrompt !== 'undefined' ? systemPrompt : "Bạn là chuyên gia cấp cao về hệ thống PGE và chuẩn lập trình BRAVO trên PostgreSQL. Nhiệm vụ của bạn là giải đáp thắc mắc, hướng dẫn chuyển đổi từ T-SQL sang PostgreSQL chuẩn xác tuyệt đối. Hãy trả lời ngắn gọn, đúng trọng tâm và dùng định dạng HTML cơ bản (<b>, <i>, <code>, <br>) để dễ đọc. Nếu không chắc chắn, hãy yêu cầu người dùng cung cấp thêm ngữ cảnh.";
   
+  // Nạp thêm nội dung các file đính kèm vào cuối prompt của người dùng
+  let finalUserText = text;
+  if (attachedFilesText && attachedFilesText.length > 0) {
+    finalUserText += "\n\n--- THÔNG TIN THÊM TỪ FILE TÀI LIỆU CỦA NGƯỜI DÙNG ---\n";
+    finalUserText += attachedFilesText.join("\n\n");
+  }
+
   if (GEMINI_API_KEY === 'YOUR_API_KEY') {
     setTimeout(() => {
       const tEl = document.getElementById(typingId);
@@ -1758,8 +1766,7 @@ function sendChatMessage() {
           <div class="msg-av">🤖</div>
           <div class="msg-bub">
             Hệ thống AI siêu việt đã sẵn sàng! 🧠⚡<br/><br/>
-            Tuy nhiên, để tôi có thể kết nối với "não bộ" của mình, bạn cần điền <strong>API Key</strong> vào mã nguồn.<br/><br/>
-            👉 Mở file <code>index.html</code>, tìm đến hàm <code>sendChatMessage</code> và thay thế <code>'YOUR_API_KEY'</code> bằng API Key của Google Gemini nhé!
+            Tuy nhiên, để tôi có thể kết nối với "não bộ" của mình, bạn cần điền <strong>API Key</strong> vào mã nguồn.
           </div>
         </div>
       `;
@@ -1773,8 +1780,8 @@ function sendChatMessage() {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      systemInstruction: { parts: [{ text: systemPrompt }] },
-      contents: [{ parts: [{ text: text }] }]
+      systemInstruction: { parts: [{ text: finalSystemPrompt }] },
+      contents: [{ parts: [{ text: finalUserText }] }]
     })
   })
   .then(res => res.json())
