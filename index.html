@@ -582,12 +582,26 @@ tr:hover td{background:rgba(255,255,255,.018);}
     <!-- ═══ PAGE: AI CHAT ═══ -->
     <div class="page" id="page-aichat">
       <div class="pg-title">🤖 Trợ lý AI PGE</div>
-      <div class="pg-sub">Hỏi đáp kiến thức, hướng dẫn cấu trúc và các hàm chuẩn BRAVO</div>
+      <div class="pg-sub">Hỏi đáp kiến thức PGE, BRAVO, PostgreSQL — Được hỗ trợ bởi Claude AI</div>
+
+      <!-- AI Provider Selector -->
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 16px;background:var(--bg3);border-radius:10px;margin-bottom:10px;flex-wrap:wrap;">
+        <span style="font-size:12px;color:var(--txt3);font-weight:600;">🧠 Chọn AI:</span>
+        <select id="ai-provider" onchange="onProviderChange()" style="background:var(--bg4);border:1px solid var(--bdr);border-radius:6px;padding:4px 10px;color:var(--txt1);font-size:12px;cursor:pointer;">
+          <option value="claude">🟣 Claude 3 Haiku (via OpenRouter - Free)</option>
+          <option value="gemini">⚡ Google Gemini 2.0 Flash (Free)</option>
+          <option value="groq">🚀 Groq - Llama 3.1 70B (Free, rất nhanh)</option>
+          <option value="mistral">💻 Mistral Codestral (Free, giỏi SQL)</option>
+        </select>
+        <button onclick="resetApiKey()" style="background:transparent;border:1px solid var(--bdr);border-radius:6px;padding:4px 10px;color:var(--txt3);font-size:11px;cursor:pointer;" title="Xóa API Key đã lưu để nhập lại">🔑 Đổi Key</button>
+        <span id="ai-provider-hint" style="font-size:11px;color:var(--cyan);"></span>
+      </div>
+
       <div class="chat-container">
         <div class="chat-msgs" id="chat-msgs">
           <div class="msg ai">
             <div class="msg-av">🤖</div>
-            <div class="msg-bub">Xin chào! Tôi là trợ lý AI chuyên về kiến thức PGE và chuẩn code BRAVO. Tôi có thể giúp gì cho bạn hôm nay?</div>
+            <div class="msg-bub">Xin chào! Tôi là Trợ lý AI PGE, chuyên gia về PostgreSQL và chuẩn code BRAVO.<br/>Chọn nguồn AI ở trên rồi đặt câu hỏi nhé! 🚀<br/><br/>💡 <b>Claude (OpenRouter)</b>: Lấy API key miễn phí tại <code>openrouter.ai</code></div>
           </div>
         </div>
         <div class="chat-input-area">
@@ -1709,117 +1723,195 @@ function handleChatKey(e) {
   }
 }
 
+// ==== AI Provider helpers ====
+function onProviderChange() {
+  const p = document.getElementById('ai-provider').value;
+  const hints = {
+    gemini: '🔑 Lấy free key tại: aistudio.google.com',
+    groq: '🔑 Lấy free key tại: console.groq.com (14,400 req/ngày)',
+    mistral: '🔑 Lấy free key tại: console.mistral.ai'
+  };
+  document.getElementById('ai-provider-hint').textContent = hints[p] || '';
+}
+
+function resetApiKey() {
+  const p = (document.getElementById('ai-provider') || {}).value || 'gemini';
+  localStorage.removeItem('bravo_gemini_key');
+  localStorage.removeItem('bravo_groq_key');
+  localStorage.removeItem('bravo_mistral_key');
+  alert('Đã xóa API Key. Lần gửi tiếp theo bạn sẽ được hỏi API Key mới.');
+}
+
+async function callGemini(apiKey, systemPromptText, userText) {
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: systemPromptText }] },
+      contents: [{ parts: [{ text: userText }] }]
+    })
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+  return data.candidates[0].content.parts[0].text;
+}
+
+async function callGroq(apiKey, systemPromptText, userText) {
+  const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+    body: JSON.stringify({
+      model: 'llama-3.1-70b-versatile',
+      messages: [
+        { role: 'system', content: systemPromptText },
+        { role: 'user', content: userText }
+      ],
+      max_tokens: 2048
+    })
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message);
+  return data.choices[0].message.content;
+}
+
+async function callMistral(apiKey, systemPromptText, userText) {
+  const res = await fetch('https://api.mistral.ai/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiKey },
+    body: JSON.stringify({
+      model: 'codestral-latest',
+      messages: [
+        { role: 'system', content: systemPromptText },
+        { role: 'user', content: userText }
+      ],
+      max_tokens: 2048
+    })
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
+  return data.choices[0].message.content;
+}
+
 function sendChatMessage() {
   const input = document.getElementById('chat-input');
   const text = input.value.trim();
   if (!text) return;
-  
+
   const msgs = document.getElementById('chat-msgs');
-  
+
   // User message
-  const userHtml = `
-    <div class="msg user">
-      <div class="msg-av">👤</div>
-      <div class="msg-bub">${text.replace(/\n/g, '<br/>')}</div>
-    </div>
-  `;
-  msgs.insertAdjacentHTML('beforeend', userHtml);
+  msgs.insertAdjacentHTML('beforeend', `<div class="msg user"><div class="msg-av">👤</div><div class="msg-bub">${text.replace(/\n/g, '<br/>')}</div></div>`);
   input.value = '';
   msgs.scrollTop = msgs.scrollHeight;
-  
+
   // Typing indicator
   const typingId = 'typing-' + Date.now();
-  const typingHtml = `
-    <div class="msg ai" id="${typingId}">
-      <div class="msg-av">🤖</div>
-      <div class="msg-bub" style="padding: 10px 16px;">
-        <div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div>
-      </div>
-    </div>
-  `;
-  msgs.insertAdjacentHTML('beforeend', typingHtml);
+  msgs.insertAdjacentHTML('beforeend', `<div class="msg ai" id="${typingId}"><div class="msg-av">🤖</div><div class="msg-bub" style="padding:10px 16px;"><div class="typing-indicator"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div></div></div>`);
   msgs.scrollTop = msgs.scrollHeight;
-  
-  // Thực tế gọi API AI (Google Gemini)
-  let GEMINI_API_KEY = localStorage.getItem('bravo_gemini_key');
-  if (!GEMINI_API_KEY) {
-    GEMINI_API_KEY = prompt("Vui lòng nhập Google Gemini API Key của bạn để sử dụng tính năng AI (chỉ lưu trên máy của bạn):");
-    if (!GEMINI_API_KEY) {
+
+  // Provider & API Key
+  const provider = (document.getElementById('ai-provider') || {value:'gemini'}).value;
+  const keyStore = { claude: 'bravo_claude_key', gemini: 'bravo_gemini_key', groq: 'bravo_groq_key', mistral: 'bravo_mistral_key' };
+  const keyHints = {
+    claude: 'OpenRouter API Key để dùng Claude (lay mien phi tai openrouter.ai/keys)',
+    gemini: 'Google Gemini API Key (lay mien phi tai aistudio.google.com)',
+    groq: 'Groq API Key (lay mien phi tai console.groq.com - 14,400 req/ngay)',
+    mistral: 'Mistral API Key (lay mien phi tai console.mistral.ai)'
+  };
+
+  let AI_API_KEY = localStorage.getItem(keyStore[provider]);
+  if (!AI_API_KEY) {
+    AI_API_KEY = prompt('Nhap ' + (keyHints[provider] || 'API Key') + ':');
+    if (!AI_API_KEY) {
       const tEl = document.getElementById(typingId);
       if(tEl) tEl.remove();
       return;
     }
-    localStorage.setItem('bravo_gemini_key', GEMINI_API_KEY);
-  }
-  // Lấy systemPrompt toàn cục (đã chứa các quy tắc Convert chuyên sâu)
-  let finalSystemPrompt = typeof systemPrompt !== 'undefined' ? systemPrompt : "Bạn là chuyên gia cấp cao về hệ thống PGE và chuẩn lập trình BRAVO trên PostgreSQL. Nhiệm vụ của bạn là giải đáp thắc mắc, hướng dẫn chuyển đổi từ T-SQL sang PostgreSQL chuẩn xác tuyệt đối. Hãy trả lời ngắn gọn, đúng trọng tâm và dùng định dạng HTML cơ bản (<b>, <i>, <code>, <br>) để dễ đọc. Nếu không chắc chắn, hãy yêu cầu người dùng cung cấp thêm ngữ cảnh.";
-  
-  // Nạp thêm nội dung các file đính kèm vào cuối prompt của người dùng
-  let finalUserText = text;
-  if (attachedFilesText && attachedFilesText.length > 0) {
-    finalUserText += "\n\n--- THÔNG TIN THÊM TỪ FILE TÀI LIỆU CỦA NGƯỜI DÙNG ---\n";
-    finalUserText += attachedFilesText.join("\n\n");
+    localStorage.setItem(keyStore[provider], AI_API_KEY);
   }
 
-  if (GEMINI_API_KEY === 'YOUR_API_KEY') {
-    setTimeout(() => {
+  // System prompt
+  const finalSystemPrompt = typeof systemPrompt !== 'undefined' ? systemPrompt :
+    'Ban la chuyen gia cap cao ve he thong PGE va chuan lap trinh BRAVO tren PostgreSQL. Hay tra loi ngan gon, dung trong tam.';
+
+  // User text + attached files
+  let finalUserText = text;
+  if (typeof attachedFilesText !== 'undefined' && attachedFilesText && attachedFilesText.length > 0) {
+    finalUserText += '\n\n--- FILE TAI LIEU ---\n' + attachedFilesText.join('\n\n');
+  }
+
+  // Dispatch to provider
+  const doFetch = async () => {
+    if (provider === 'claude') {
+      const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + AI_API_KEY,
+          'HTTP-Referer': window.location.origin,
+          'X-Title': 'PGE BRAVO Converter'
+        },
+        body: JSON.stringify({
+          model: 'anthropic/claude-3-haiku',
+          messages: [{ role: 'system', content: finalSystemPrompt }, { role: 'user', content: finalUserText }],
+          max_tokens: 2048
+        })
+      });
+      const d = await res.json();
+      if (d.error) throw new Error(d.error.message || JSON.stringify(d.error));
+      return d.choices[0].message.content;
+    } else if (provider === 'groq') {
+      const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + AI_API_KEY },
+        body: JSON.stringify({ model: 'llama-3.1-70b-versatile', messages: [{ role: 'system', content: finalSystemPrompt }, { role: 'user', content: finalUserText }], max_tokens: 2048 })
+      });
+      const d = await res.json();
+      if (d.error) throw new Error(d.error.message);
+      return d.choices[0].message.content;
+    } else if (provider === 'mistral') {
+      const res = await fetch('https://api.mistral.ai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + AI_API_KEY },
+        body: JSON.stringify({ model: 'codestral-latest', messages: [{ role: 'system', content: finalSystemPrompt }, { role: 'user', content: finalUserText }], max_tokens: 2048 })
+      });
+      const d = await res.json();
+      if (d.error) throw new Error(JSON.stringify(d.error));
+      return d.choices[0].message.content;
+    } else {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${AI_API_KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ systemInstruction: { parts: [{ text: finalSystemPrompt }] }, contents: [{ parts: [{ text: finalUserText }] }] })
+      });
+      const d = await res.json();
+      if (d.error) throw new Error(d.error.message);
+      return d.candidates[0].content.parts[0].text;
+    }
+  };
+
+  doFetch()
+    .then(reply => {
       const tEl = document.getElementById(typingId);
       if(tEl) tEl.remove();
-      const aiHtml = `
-        <div class="msg ai">
-          <div class="msg-av">🤖</div>
-          <div class="msg-bub">
-            Hệ thống AI siêu việt đã sẵn sàng! 🧠⚡<br/><br/>
-            Tuy nhiên, để tôi có thể kết nối với "não bộ" của mình, bạn cần điền <strong>API Key</strong> vào mã nguồn.
-          </div>
-        </div>
-      `;
-      msgs.insertAdjacentHTML('beforeend', aiHtml);
+      const formatted = reply
+        .replace(/\n/g, '<br/>')
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/```([\s\S]*?)```/g, '<div class="mo-code" style="margin-top:6px;padding:8px;background:var(--bg3);border-radius:6px;font-family:monospace;font-size:12px;overflow-x:auto;white-space:pre;">$1</div>')
+        .replace(/`(.*?)`/g, '<code style="background:var(--bg3);padding:1px 4px;border-radius:3px;">$1</code>');
+      msgs.insertAdjacentHTML('beforeend', `<div class="msg ai"><div class="msg-av">🤖</div><div class="msg-bub">${formatted}</div></div>`);
       msgs.scrollTop = msgs.scrollHeight;
-    }, 1200);
-    return;
-  }
-
-  fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: finalSystemPrompt }] },
-      contents: [{ parts: [{ text: finalUserText }] }]
     })
-  })
-  .then(res => res.json())
-  .then(data => {
-    const tEl = document.getElementById(typingId);
-    if(tEl) tEl.remove();
-    let reply = "Xin lỗi, tôi không thể xử lý câu hỏi này.";
-    if (data.candidates && data.candidates.length > 0) {
-      reply = data.candidates[0].content.parts[0].text;
-      reply = reply.replace(/\n/g, '<br/>').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>').replace(/```(.*?)```/gs, '<div class="mo-code" style="margin-top:6px">$1</div>').replace(/`(.*?)`/g, '<code>$1</code>');
-    }
-    
-    const aiHtml = `
-      <div class="msg ai">
-        <div class="msg-av">🤖</div>
-        <div class="msg-bub">${reply}</div>
-      </div>
-    `;
-    msgs.insertAdjacentHTML('beforeend', aiHtml);
-    msgs.scrollTop = msgs.scrollHeight;
-  })
-  .catch(err => {
-    const tEl = document.getElementById(typingId);
-    if(tEl) tEl.remove();
-    const aiHtml = `
-      <div class="msg ai">
-        <div class="msg-av">🤖</div>
-        <div class="msg-bub" style="color:var(--red)">Lỗi kết nối AI: ${err.message}</div>
-      </div>
-    `;
-    msgs.insertAdjacentHTML('beforeend', aiHtml);
-    msgs.scrollTop = msgs.scrollHeight;
-  });
+    .catch(err => {
+      const tEl = document.getElementById(typingId);
+      if(tEl) tEl.remove();
+      localStorage.removeItem(keyStore[provider] || 'bravo_gemini_key');
+      msgs.insertAdjacentHTML('beforeend', `<div class="msg ai"><div class="msg-av">🤖</div><div class="msg-bub" style="color:var(--red)">❌ Lỗi kết nối <b>${provider}</b>: ${err.message}<br/><small style="color:var(--txt3)">API Key đã xóa. Nhập lại khi gửi tin tiếp.</small></div></div>`);
+      msgs.scrollTop = msgs.scrollHeight;
+    });
 }
+
 </script>
 </body>
 </html>
